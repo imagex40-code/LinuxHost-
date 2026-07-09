@@ -14,6 +14,8 @@ val appModule = module {
 
     single { ProotEngine(androidContext()) }
     single { TerminalSession(androidContext()) }
+
+    factory { InstallViewModel(get()) }
 }
 
 fun initKoin(context: Context) {

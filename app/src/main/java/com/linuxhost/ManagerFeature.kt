@@ -12,17 +12,21 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,8 +43,16 @@ fun ManagerScreen() {
     val engine = koinInject<ProotEngine>()
     val status by engine.status.collectAsState()
     val scope = rememberCoroutineScope()
+    var showProgress by remember { mutableStateOf(false) }
+    var progressState by remember { mutableStateOf(Progress()) }
 
     LaunchedEffect(Unit) { engine.checkStatus() }
+
+    LaunchedEffect(showProgress) {
+        if (showProgress) {
+            engine.progress.collect { p -> progressState = p }
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -61,15 +73,48 @@ fun ManagerScreen() {
         ActionGrid(
             status = status,
             onInstall = { scope.launch {
-                engine.downloadProotBinary()
-                val tarball = engine.downloadRootfs()
-                engine.installRootfs(tarball)
+                showProgress = true
+                try {
+                    engine.downloadProotBinary()
+                    val tarball = engine.downloadRootfs()
+                    engine.installRootfs(tarball)
+                    engine.checkStatus()
+                } catch (_: Exception) {
+                } finally {
+                    showProgress = false
+                }
             }},
             onLaunch = { scope.launch { engine.launch() } },
             onStop = { engine.stop() },
             onUpdate = { scope.launch { engine.updatePackages() } },
             onRepair = { scope.launch { engine.repair() } },
             onRemove = { scope.launch { engine.remove() } },
+        )
+    }
+
+    if (showProgress) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Installing Ubuntu") },
+            text = {
+                Column {
+                    Text(progressState.message)
+                    Spacer(Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { progressState.percent / 100f },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(4.dp)),
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "${progressState.percent}%",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {},
         )
     }
 }

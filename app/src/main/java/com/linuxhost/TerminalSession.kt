@@ -5,6 +5,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.io.*
 
+private const val MAX_LINES = 500
+
 data class TerminalLine(
     val text: String,
     val isInput: Boolean = false,
@@ -37,6 +39,9 @@ class TerminalSession(private val context: Context) {
                         var line: String?
                         while (bufferedReader.readLine().also { line = it } != null) {
                             _lines.value = _lines.value + TerminalLine(text = line!!)
+                            if (_lines.value.size > MAX_LINES) {
+                                _lines.value = _lines.value.takeLast(MAX_LINES)
+                            }
                         }
                     }
                 } catch (_: IOException) {
@@ -54,6 +59,9 @@ class TerminalSession(private val context: Context) {
     fun writeCommand(command: String) {
         if (!_isRunning.value) return
         _lines.value = _lines.value + TerminalLine(text = command, isInput = true)
+        if (_lines.value.size > MAX_LINES) {
+            _lines.value = _lines.value.takeLast(MAX_LINES)
+        }
         try {
             writer?.let {
                 it.write((command + "\n").toByteArray(Charsets.UTF_8))

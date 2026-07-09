@@ -39,12 +39,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.lifecycle.viewmodel.compose.viewModel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import org.koin.compose.viewModel.koinViewModel
 
 sealed interface InstallUiState {
     data object Idle : InstallUiState
@@ -55,7 +54,7 @@ sealed interface InstallUiState {
     data class Error(val message: String) : InstallUiState
 }
 
-class InstallViewModel : ViewModel() {
+class InstallViewModel(private val engine: ProotEngine) : ViewModel() {
     private val _state = MutableStateFlow<InstallUiState>(InstallUiState.Idle)
     val state: StateFlow<InstallUiState> = _state.asStateFlow()
 
@@ -66,51 +65,36 @@ class InstallViewModel : ViewModel() {
             try {
                 downloadStartTime = System.currentTimeMillis()
 
-                // 1. Download PRoot binary (~3 seconds, 0-38%)
-                // Real URL: https://github.com/proot-me/proot/releases/download/v5.4.0/proot-aarch64
-                // Real path: {filesDir}/proot
-                val totalBytes = 537_919_488L // ~513 MB combined (PRoot + Rootfs)
-                for (i in 1..30) {
-                    val progress = i * 38 / 30
-                    _state.value = InstallUiState.Downloading(
-                        progress = progress,
-                        message = "Downloading PRoot binary...",
-                        bytesDownloaded = totalBytes * progress / 100,
-                        totalBytes = totalBytes,
-                    )
-                    delay(100)
+                val collector = launch {
+                    engine.progress.collect { p ->
+                        when (val s = _state.value) {
+                            is InstallUiState.Idle, is InstallUiState.Downloading -> {
+                                _state.value = InstallUiState.Downloading(
+                                    progress = p.percent,
+                                    message = p.message,
+                                    bytesDownloaded = p.bytesDownloaded,
+                                    totalBytes = p.totalBytes,
+                                )
+                            }
+                            is InstallUiState.Extracting -> {
+                                _state.value = InstallUiState.Extracting(
+                                    progress = p.percent,
+                                    message = p.message,
+                                )
+                            }
+                            else -> {}
+                        }
+                    }
                 }
 
-                // 2. Download Ubuntu rootfs (~5 seconds, 38-100%)
-                // Real URL: https://cloud-images.ubuntu.com/minimal/releases/noble/releases/linuxhost-rootfs-aarch64.tar.gz
-                // Real path: {filesDir}/rootfs.tar.gz
-                for (i in 1..50) {
-                    val progress = 38 + (i * 62 / 50)
-                    _state.value = InstallUiState.Downloading(
-                        progress = progress,
-                        message = "Downloading Ubuntu rootfs...",
-                        bytesDownloaded = totalBytes * progress / 100,
-                        totalBytes = totalBytes,
-                    )
-                    delay(100)
-                }
+                engine.downloadProotBinary()
+                val tarballPath = engine.downloadRootfs()
 
-                // 3. Extract rootfs (~4 seconds, 0-100%)
-                // Real path: tar -xzf {filesDir}/rootfs.tar.gz -C {filesDir}/ubuntu
-                for (i in 1..40) {
-                    _state.value = InstallUiState.Extracting(
-                        progress = i * 100 / 40,
-                        message = "Extracting files ($i/40)...",
-                    )
-                    delay(100)
-                }
+                _state.value = InstallUiState.Extracting(0, "Extracting rootfs...")
+                engine.installRootfs(tarballPath)
 
-                // 4. Post-install configuration (~2 seconds)
-                // Real steps: create fstab, set up DNS, configure user profile, set permissions
+                collector.cancel()
                 _state.value = InstallUiState.Configuring
-                delay(2000)
-
-                // 5. Complete
                 _state.value = InstallUiState.Complete
             } catch (e: Exception) {
                 _state.value = InstallUiState.Error(
@@ -144,7 +128,7 @@ private fun stepIndex(state: InstallUiState): Int = when (state) {
 @Composable
 fun InstallScreen(
     onLaunchDashboard: () -> Unit = {},
-    viewModel: InstallViewModel = viewModel(),
+    viewModel: InstallViewModel = koinViewModel(),
 ) {
     val state by viewModel.state.collectAsState()
     val currentStep = remember(state) { stepIndex(state) }

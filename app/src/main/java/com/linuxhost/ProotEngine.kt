@@ -1,6 +1,7 @@
 package com.linuxhost
 
 import android.content.Context
+import android.os.Build
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -34,6 +35,20 @@ data class Progress(
 
 class ProotEngine(private val context: Context) {
 
+    val arch: String by lazy {
+        when (Build.CPU_ABI) {
+            "aarch64", "arm64", "arm64-v8a" -> "aarch64"
+            "armv7l", "armeabi-v7a" -> "armv7l"
+            "x86_64", "x86" -> "x86_64"
+            else -> "aarch64"
+        }
+    }
+
+    private val prootDownloadUrl: String get() =
+        "https://github.com/termux/proot/releases/download/v5.4.0/proot-$arch"
+    private val rootfsDownloadUrl: String get() =
+        "http://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04-base-${archStringMap[arch]}.tar.gz"
+
     private val _status = MutableStateFlow(InstanceStatus.NOT_INSTALLED)
     val status: StateFlow<InstanceStatus> = _status.asStateFlow()
 
@@ -48,10 +63,11 @@ class ProotEngine(private val context: Context) {
     private val processLock = Any()
 
     companion object {
-        private const val PROOT_DOWNLOAD_URL =
-            "https://github.com/termux/proot/releases/download/v5.4.0/proot-aarch64"
-        private const val ROOTFS_DOWNLOAD_URL =
-            "http://cdimage.ubuntu.com/ubuntu-base/releases/26.04/release/ubuntu-base-26.04-base-arm64.tar.gz"
+        private val archStringMap = mapOf(
+            "aarch64" to "arm64",
+            "armv7l" to "armhf",
+            "x86_64" to "amd64",
+        )
     }
 
     suspend fun checkStatus() = withContext(Dispatchers.IO) {
@@ -71,7 +87,7 @@ class ProotEngine(private val context: Context) {
         _status.value = InstanceStatus.INSTALLING
         _progress.emit(Progress(0, "Downloading PRoot binary..."))
         try {
-            downloadFile(URL(PROOT_DOWNLOAD_URL), prootBin)
+            downloadFile(URL(prootDownloadUrl), prootBin)
             prootBin.setExecutable(true)
             _progress.emit(Progress(100, "PRoot binary downloaded and made executable"))
         } catch (e: Exception) {
@@ -86,7 +102,7 @@ class ProotEngine(private val context: Context) {
         val tempFile = File(filesDir, "ubuntu-rootfs.tar.gz")
         _progress.emit(Progress(0, "Downloading Ubuntu rootfs..."))
         try {
-            downloadFile(URL(ROOTFS_DOWNLOAD_URL), tempFile)
+            downloadFile(URL(rootfsDownloadUrl), tempFile)
             _progress.emit(Progress(100, "Ubuntu rootfs downloaded"))
             tempFile.absolutePath
         } catch (e: Exception) {
@@ -99,6 +115,16 @@ class ProotEngine(private val context: Context) {
     suspend fun installRootfs(tarballPath: String) = withContext(Dispatchers.IO) {
         _status.value = InstanceStatus.INSTALLING
         try {
+            val hasTar = try {
+                Runtime.getRuntime().exec("which tar").also { it.waitFor() }.exitValue() == 0
+            } catch (_: Exception) {
+                false
+            }
+            if (!hasTar) {
+                val msg = "tar not found. Install it with: pkg install tar"
+                _progress.emit(Progress(0, msg))
+                throw RuntimeException(msg)
+            }
             rootfsDir.mkdirs()
             _progress.emit(Progress(0, "Extracting rootfs, this may take a while..."))
             runCommand(listOf("tar", "-xf", tarballPath, "-C", rootfsDir.absolutePath))
@@ -318,28 +344,33 @@ class ProotEngine(private val context: Context) {
     }
 
     private suspend fun downloadFile(url: URL, destination: File) {
-        val connection = url.openConnection() as HttpURLConnection
-        connection.connectTimeout = 30_000
-        connection.readTimeout = 30_000
-        connection.instanceFollowRedirects = true
-        connection.connect()
+        try {
+            val connection = url.openConnection() as HttpURLConnection
+            connection.connectTimeout = 30_000
+            connection.readTimeout = 30_000
+            connection.instanceFollowRedirects = true
+            connection.connect()
 
-        val totalBytes = connection.contentLengthLong
-        var downloaded = 0L
+            val totalBytes = connection.contentLengthLong
+            var downloaded = 0L
 
-        connection.inputStream.use { input ->
-            FileOutputStream(destination).use { output ->
-                val buffer = ByteArray(8192)
-                var read: Int
-                while (input.read(buffer).also { read = it } != -1) {
-                    output.write(buffer, 0, read)
-                    downloaded += read
-                    if (totalBytes > 0) {
-                        val pct = ((downloaded.toDouble() / totalBytes) * 100).toInt()
-                        _progress.emit(Progress(pct, "Downloading...", downloaded, totalBytes))
+            connection.inputStream.use { input ->
+                FileOutputStream(destination).use { output ->
+                    val buffer = ByteArray(8192)
+                    var read: Int
+                    while (input.read(buffer).also { read = it } != -1) {
+                        output.write(buffer, 0, read)
+                        downloaded += read
+                        if (totalBytes > 0) {
+                            val pct = ((downloaded.toDouble() / totalBytes) * 100).toInt()
+                            _progress.emit(Progress(pct, "Downloading...", downloaded, totalBytes))
+                        }
                     }
                 }
             }
+        } catch (e: Exception) {
+            _progress.emit(Progress(0, "Network error: ${e.message}"))
+            throw e
         }
     }
 }

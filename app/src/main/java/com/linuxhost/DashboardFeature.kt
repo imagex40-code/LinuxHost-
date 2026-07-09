@@ -37,7 +37,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.sp
+import java.util.Calendar
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
@@ -49,9 +51,11 @@ fun DashboardScreen() {
     var breakdown by remember { mutableStateOf<StorageBreakdown?>(null) }
     var pkgCount by remember { mutableStateOf(0) }
     var pendingUpdates by remember { mutableStateOf(0) }
+    var lastCheckTime by remember { mutableStateOf(0L) }
 
     LaunchedEffect(Unit) {
         engine.checkStatus()
+        lastCheckTime = System.currentTimeMillis()
         breakdown = engine.getStorageBreakdown()
         pkgCount = engine.getPackageCount()
         pendingUpdates = engine.getPendingUpdates()
@@ -64,23 +68,50 @@ fun DashboardScreen() {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(
-            "Good morning, root",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 13.sp,
-        )
+        when (status) {
+            InstanceStatus.NOT_INSTALLED, InstanceStatus.INSTALLING -> {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "Ubuntu is not installed.\nGo to Manager and tap Install.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyLarge,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+            else -> {
+                val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+                val greeting = when {
+                    hour < 12 -> "Good morning, root"
+                    hour < 18 -> "Good afternoon, root"
+                    else -> "Good evening, root"
+                }
+                Text(
+                    greeting,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                )
 
-        StatusCard(status = status)
-        StorageCard(breakdown = breakdown)
-        StatsGrid(pkgCount = pkgCount, pendingUpdates = pendingUpdates)
-        HealthCard(status = status)
-        QuickActions(
-            status = status,
-            onLaunch = { scope.launch { engine.launch() } },
-            onStop = { engine.stop() },
-            onUpdate = { scope.launch { engine.updatePackages() } },
-            onRepair = { scope.launch { engine.repair() } },
-        )
+                StatusCard(status = status)
+                StorageCard(breakdown = breakdown)
+                StatsGrid(
+                    pkgCount = pkgCount,
+                    pendingUpdates = pendingUpdates,
+                    isRunning = status == InstanceStatus.RUNNING,
+                )
+                HealthCard(status = status, lastCheckTime = lastCheckTime)
+                QuickActions(
+                    status = status,
+                    onLaunch = { scope.launch { engine.launch() } },
+                    onStop = { engine.stop() },
+                    onUpdate = { scope.launch { engine.updatePackages() } },
+                    onRepair = { scope.launch { engine.repair() } },
+                )
+            }
+        }
     }
 }
 
@@ -157,9 +188,7 @@ private fun StorageCard(breakdown: StorageBreakdown?) {
                 )
             }
             Spacer(Modifier.height(10.dp))
-            val pct = if ((breakdown?.totalBytes ?: 0) > 0) {
-                (breakdown?.totalBytes ?: 0).toFloat() / 8_000_000_000f
-            } else 0f
+            val pct = if ((breakdown?.totalBytes ?: 0) > 0) 1f else 0f
             LinearProgressIndicator(
                 progress = { pct.coerceIn(0f, 1f) },
                 modifier = Modifier
@@ -209,7 +238,7 @@ private fun StorageBar(name: String, size: String, fraction: Float, color: Color
 }
 
 @Composable
-private fun StatsGrid(pkgCount: Int = 0, pendingUpdates: Int = 0) {
+private fun StatsGrid(pkgCount: Int = 0, pendingUpdates: Int = 0, isRunning: Boolean = false) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -223,10 +252,10 @@ private fun StatsGrid(pkgCount: Int = 0, pendingUpdates: Int = 0) {
         )
         StatCard(
             modifier = Modifier.weight(1f),
-            number = "3",
+            number = if (isRunning) "1" else "0",
             label = "Active Sessions",
-            sub = "PID 842, 921, 1043",
-            subColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            sub = if (isRunning) "Running" else "None",
+            subColor = if (isRunning) LinuxGreen else MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -258,7 +287,18 @@ private fun StatCard(
 }
 
 @Composable
-private fun HealthCard(status: InstanceStatus) {
+private fun HealthCard(status: InstanceStatus, lastCheckTime: Long) {
+    val lastCheckText = remember(lastCheckTime) {
+        if (lastCheckTime == 0L) "just now" else {
+            val diff = (System.currentTimeMillis() - lastCheckTime) / 1000
+            when {
+                diff < 60 -> "${diff}s ago"
+                diff < 3600 -> "${diff / 60}m ago"
+                diff < 86400 -> "${diff / 3600}h ago"
+                else -> "${diff / 86400}d ago"
+            }
+        }
+    }
     val (text, color) = when (status) {
         InstanceStatus.RUNNING -> "All systems healthy" to LinuxGreen
         InstanceStatus.STOPPED -> "Ubuntu is stopped" to LinuxWarning
@@ -288,7 +328,7 @@ private fun HealthCard(status: InstanceStatus) {
                 Text(text, color = color, fontWeight = FontWeight.SemiBold)
             }
             Text(
-                "Last check: just now",
+                "Last check: $lastCheckText",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp,
             )
