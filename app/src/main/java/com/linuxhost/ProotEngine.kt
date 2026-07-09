@@ -45,9 +45,9 @@ class ProotEngine(private val context: Context) {
     }
 
     private val prootDownloadUrl: String get() =
-        "https://github.com/termux/proot/releases/download/v5.4.0/proot-$arch"
+        "https://skirsten.github.io/proot-portable-android-binaries/$arch/proot"
     private val rootfsDownloadUrl: String get() =
-        "http://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04-base-${archStringMap[arch]}.tar.gz"
+        "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04-base-${archStringMap[arch]}.tar.gz"
 
     private val _status = MutableStateFlow(InstanceStatus.NOT_INSTALLED)
     val status: StateFlow<InstanceStatus> = _status.asStateFlow()
@@ -115,6 +115,7 @@ class ProotEngine(private val context: Context) {
     suspend fun installRootfs(tarballPath: String) = withContext(Dispatchers.IO) {
         _status.value = InstanceStatus.INSTALLING
         try {
+            File(filesDir, "tmp").mkdirs()
             val hasTar = try {
                 Runtime.getRuntime().exec("which tar").also { it.waitFor() }.exitValue() == 0
             } catch (_: Exception) {
@@ -140,6 +141,7 @@ class ProotEngine(private val context: Context) {
 
     suspend fun launch() = withContext(Dispatchers.IO) {
         try {
+            File(filesDir, "tmp").mkdirs()
             val cmd = buildList {
                 add(prootBin.absolutePath)
                 add("-0")
@@ -163,6 +165,7 @@ class ProotEngine(private val context: Context) {
                 add("--login")
             }
             val pb = ProcessBuilder(cmd)
+            pb.environment()["PROOT_TMP_DIR"] = "${filesDir.absolutePath}/tmp"
             pb.redirectErrorStream(true)
             val p = pb.start()
             synchronized(processLock) { process = p }
@@ -305,6 +308,7 @@ class ProotEngine(private val context: Context) {
     private fun runCommand(cmd: List<String>, workingDir: File? = null): String {
         val pb = ProcessBuilder(cmd)
         pb.directory(workingDir)
+        pb.environment()["PROOT_TMP_DIR"] = "${filesDir.absolutePath}/tmp"
         pb.redirectErrorStream(true)
         val p = pb.start()
         val output = p.inputStream.bufferedReader().readText().trim()
@@ -317,6 +321,7 @@ class ProotEngine(private val context: Context) {
 
     private fun runCommandWithOutput(cmd: List<String>): List<String> {
         val pb = ProcessBuilder(cmd)
+        pb.environment()["PROOT_TMP_DIR"] = "${filesDir.absolutePath}/tmp"
         pb.redirectErrorStream(true)
         val p = pb.start()
         val reader = p.inputStream.bufferedReader()
