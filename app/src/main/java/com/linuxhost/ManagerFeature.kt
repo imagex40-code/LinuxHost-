@@ -1,7 +1,6 @@
 package com.linuxhost
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,9 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
@@ -21,6 +18,11 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -29,9 +31,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
+import org.koin.compose.koinInject
 
 @Composable
 fun ManagerScreen() {
+    val engine = koinInject<ProotEngine>()
+    val status by engine.status.collectAsState()
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) { engine.checkStatus() }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -39,7 +49,7 @@ fun ManagerScreen() {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        InfoCard()
+        InfoCard(status = status)
 
         Text(
             "Actions",
@@ -48,24 +58,43 @@ fun ManagerScreen() {
             fontWeight = FontWeight.SemiBold,
         )
 
-        ActionGrid()
+        ActionGrid(
+            status = status,
+            onInstall = { scope.launch {
+                engine.downloadProotBinary()
+                val tarball = engine.downloadRootfs()
+                engine.installRootfs(tarball)
+            }},
+            onLaunch = { scope.launch { engine.launch() } },
+            onStop = { engine.stop() },
+            onUpdate = { scope.launch { engine.updatePackages() } },
+            onRepair = { scope.launch { engine.repair() } },
+            onRemove = { scope.launch { engine.remove() } },
+        )
     }
 }
 
 @Composable
-private fun InfoCard() {
+private fun InfoCard(status: InstanceStatus) {
+    val (statusText, statusColor) = when (status) {
+        InstanceStatus.RUNNING -> "Running" to LinuxGreen
+        InstanceStatus.STOPPED -> "Stopped" to LinuxWarning
+        InstanceStatus.INSTALLED -> "Installed" to LinuxInfo
+        InstanceStatus.INSTALLING -> "Installing..." to LinuxWarning
+        InstanceStatus.ERROR -> "Error" to LinuxDanger
+        InstanceStatus.NOT_INSTALLED -> "Not Installed" to Color.Gray
+    }
+
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         shape = RoundedCornerShape(16.dp),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            InfoRow("Status", "Running", valueColor = LinuxGreen)
+            InfoRow("Status", statusText, valueColor = statusColor)
             HorizontalDivider(color = Color(0xFF21262D))
             InfoRow("Version", "Ubuntu 26.04 LTS")
             HorizontalDivider(color = Color(0xFF21262D))
             InfoRow("Architecture", "aarch64")
-            HorizontalDivider(color = Color(0xFF21262D))
-            InfoRow("Uptime", "2h 14m")
             HorizontalDivider(color = Color(0xFF21262D))
             InfoRow("Rootfs Location", "/data/data/.../ubuntu/", valueSize = 11.sp)
         }
@@ -91,7 +120,15 @@ private fun InfoRow(label: String, value: String, valueColor: Color? = null, val
 }
 
 @Composable
-private fun ActionGrid() {
+private fun ActionGrid(
+    status: InstanceStatus,
+    onInstall: () -> Unit,
+    onLaunch: () -> Unit,
+    onStop: () -> Unit,
+    onUpdate: () -> Unit,
+    onRepair: () -> Unit,
+    onRemove: () -> Unit,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -102,10 +139,9 @@ private fun ActionGrid() {
                 icon = "\uD83D\uDCD6",
                 name = "Install",
                 desc = "Fresh Ubuntu 26.04",
-                badge = "Installed",
-                badgeColor = LinuxGreen,
-                badgeBg = Color(0xFF0D5332),
                 accentColor = Color(0xFF1F6FEB),
+                onClick = onInstall,
+                enabled = status == InstanceStatus.NOT_INSTALLED,
             )
             ActionCard(
                 modifier = Modifier.weight(1f),
@@ -113,6 +149,8 @@ private fun ActionGrid() {
                 name = "Launch",
                 desc = "Start Ubuntu session",
                 accentColor = LinuxGreen,
+                onClick = onLaunch,
+                enabled = status == InstanceStatus.INSTALLED || status == InstanceStatus.STOPPED,
             )
         }
         Row(
@@ -125,6 +163,8 @@ private fun ActionGrid() {
                 name = "Stop",
                 desc = "Shutdown all sessions",
                 accentColor = LinuxWarning,
+                onClick = onStop,
+                enabled = status == InstanceStatus.RUNNING,
             )
             ActionCard(
                 modifier = Modifier.weight(1f),
@@ -132,6 +172,8 @@ private fun ActionGrid() {
                 name = "Update",
                 desc = "apt update & upgrade",
                 accentColor = LinuxPurple,
+                onClick = onUpdate,
+                enabled = status == InstanceStatus.RUNNING,
             )
         }
         Row(
@@ -144,6 +186,8 @@ private fun ActionGrid() {
                 name = "Repair",
                 desc = "Fix common issues",
                 accentColor = LinuxOrange,
+                onClick = onRepair,
+                enabled = status == InstanceStatus.RUNNING || status == InstanceStatus.ERROR,
             )
             ActionCard(
                 modifier = Modifier.weight(1f),
@@ -151,9 +195,8 @@ private fun ActionGrid() {
                 name = "Remove",
                 desc = "Wipe Ubuntu entirely",
                 accentColor = LinuxDanger,
-                badge = "Danger",
-                badgeColor = LinuxDanger,
-                badgeBg = Color(0xFF3D1217),
+                onClick = onRemove,
+                enabled = status != InstanceStatus.NOT_INSTALLED && status != InstanceStatus.INSTALLING,
             )
         }
     }
@@ -166,14 +209,16 @@ private fun ActionCard(
     name: String,
     desc: String,
     accentColor: Color,
-    badge: String? = null,
-    badgeColor: Color = Color.Transparent,
-    badgeBg: Color = Color.Transparent,
+    onClick: () -> Unit,
+    enabled: Boolean,
 ) {
     Card(
         modifier = modifier,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = CardDefaults.cardColors(
+            containerColor = if (enabled) MaterialTheme.colorScheme.surface else Color(0xFF0D1117),
+        ),
         shape = RoundedCornerShape(14.dp),
+        onClick = { if (enabled) onClick() },
     ) {
         Column(
             modifier = Modifier
@@ -181,31 +226,18 @@ private fun ActionCard(
                 .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            if (badge != null) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    Text(
-                        badge,
-                        color = badgeColor,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(badgeBg)
-                            .padding(horizontal = 8.dp, vertical = 2.dp),
-                    )
-                }
-            } else {
-                Spacer(Modifier.height(18.dp))
-            }
+            Spacer(Modifier.height(18.dp))
             Text(icon, fontSize = 28.sp)
             Spacer(Modifier.height(4.dp))
-            Text(name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            Text(
+                name,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp,
+                color = if (enabled) MaterialTheme.colorScheme.onSurface else Color(0xFF484F58),
+            )
             Text(
                 desc,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else Color(0xFF484F58),
                 fontSize = 11.sp,
                 textAlign = TextAlign.Center,
             )

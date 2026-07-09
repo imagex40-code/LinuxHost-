@@ -15,10 +15,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,11 +32,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.delay
+import org.koin.compose.koinInject
 
 private val TerminalBg = Color(0xFF0A0E14)
 private val TerminalGreen = Color(0xFF98C379)
@@ -41,6 +48,20 @@ private val TerminalText = Color(0xFFABB2BF)
 
 @Composable
 fun TerminalScreen() {
+    val session = koinInject<TerminalSession>()
+    val lines by session.lines.collectAsState()
+    val isRunning by session.isRunning.collectAsState()
+    var input by remember { mutableStateOf("") }
+    val scrollState = rememberScrollState()
+
+    val engine = koinInject<ProotEngine>()
+
+    LaunchedEffect(isRunning) {
+        if (isRunning) {
+            scrollState.animateScrollTo(scrollState.maxValue)
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -51,18 +72,26 @@ fun TerminalScreen() {
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
                 .background(Color(0xFF0D1117))
-                .border(
-                    width = 1.dp,
-                    color = Color(0xFF30363D),
-                    shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp),
-                )
+                .border(1.dp, Color(0xFF30363D), RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
-            Text(
-                "ubuntu@localhost",
-                color = Color(0xFF8B949E),
-                fontSize = 12.sp,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "ubuntu@localhost",
+                    color = Color(0xFF8B949E),
+                    fontSize = 12.sp,
+                    fontWeight = if (isRunning) FontWeight.Bold else FontWeight.Normal,
+                )
+                if (isRunning) {
+                    Spacer(Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(LinuxGreen)
+                    )
+                }
+            }
         }
 
         Box(
@@ -71,106 +100,87 @@ fun TerminalScreen() {
                 .weight(1f)
                 .clip(RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp))
                 .background(TerminalBg)
-                .border(
-                    width = 1.dp,
-                    color = Color(0xFF30363D),
-                    shape = RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp),
-                )
+                .border(1.dp, Color(0xFF30363D), RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp))
                 .padding(12.dp),
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .verticalScroll(rememberScrollState()),
+                    .verticalScroll(scrollState),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                TerminalLine(prompt = "root@localhost", path = "~", cmd = "$", output = "neofetch")
-                TerminalOutput("OS: Ubuntu 26.04 LTS aarch64")
-                TerminalOutput("Kernel: 6.17.0-PRoot-Distro")
-                TerminalOutput("Packages: 1847 (dpkg)")
-                TerminalOutput("Shell: bash 5.2.37")
-                TerminalOutput("Uptime: 2 hours, 14 mins")
-                Spacer(Modifier.height(8.dp))
-                TerminalLine(prompt = "root@localhost", path = "~", cmd = "$", output = "apt update")
-                TerminalOutput("Hit:1 http://archive.ubuntu.com noble InRelease")
-                TerminalOutput("Reading package lists... Done")
-                TerminalOutput("12 packages can be upgraded.")
-                Spacer(Modifier.height(8.dp))
-                CursorLine()
+                if (lines.isEmpty()) {
+                    Text(
+                        "Type a command to start.\nUse 'bash' to enter the Ubuntu shell.",
+                        color = Color(0xFF484F58),
+                        fontSize = 13.sp,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                } else {
+                    lines.forEach { line ->
+                        Text(
+                            line.text,
+                            color = if (line.isInput) TerminalYellow else TerminalText,
+                            fontSize = 13.sp,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                }
             }
         }
 
         Spacer(Modifier.height(8.dp))
 
-        Row(
+        TextField(
+            value = input,
+            onValueChange = { input = it },
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFF161B22))
-                .border(1.dp, Color(0xFF30363D), RoundedCornerShape(8.dp))
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "root@localhost:~$",
-                color = TerminalGreen,
-                fontSize = 13.sp,
+                .clip(RoundedCornerShape(8.dp)),
+            placeholder = {
+                Text(
+                    "Type a command...",
+                    color = Color(0xFF484F58),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                )
+            },
+            textStyle = TextStyle(
+                color = TerminalYellow,
                 fontFamily = FontFamily.Monospace,
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                "Type a command...",
-                color = Color(0xFF484F58),
                 fontSize = 13.sp,
-                fontFamily = FontFamily.Monospace,
-            )
-        }
-    }
-}
-
-@Composable
-private fun TerminalLine(prompt: String, path: String, cmd: String, output: String) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("$prompt:", color = TerminalGreen, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
-        Text(path, color = TerminalBlue, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
-        Spacer(Modifier.width(1.dp))
-        Text("$cmd ", color = TerminalYellow, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
-        Text(output, color = TerminalText, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
-    }
-}
-
-@Composable
-private fun TerminalOutput(text: String) {
-    Text(
-        text,
-        color = TerminalText,
-        fontSize = 13.sp,
-        fontFamily = FontFamily.Monospace,
-        modifier = Modifier.padding(start = 8.dp),
-    )
-}
-
-@Composable
-private fun CursorLine() {
-    var visible by remember { mutableStateOf(true) }
-
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(500)
-            visible = !visible
-        }
-    }
-
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("root@localhost:", color = TerminalGreen, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
-        Text("~", color = TerminalBlue, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
-        Text("$ ", color = TerminalYellow, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
-        if (visible) {
-            Box(
-                modifier = Modifier
-                    .size(width = 8.dp, height = 16.dp)
-                    .background(Color(0xFF528BFF))
-            )
-        }
+            ),
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = Color(0xFF161B22),
+                unfocusedContainerColor = Color(0xFF161B22),
+                cursorColor = LinuxGreen,
+                focusedIndicatorColor = Color.Transparent,
+                unfocusedIndicatorColor = Color.Transparent,
+            ),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+            keyboardActions = KeyboardActions(
+                onSend = {
+                    if (input.isNotBlank()) {
+                        if (!isRunning) {
+                            val cmd = listOf(
+                                engine.prootBin.absolutePath, "-0", "--link2symlink",
+                                "-b", "/proc:/proc",
+                                "-b", "/sys:/sys",
+                                "-b", "/dev:/dev",
+                                "-b", "/sdcard:/sdcard",
+                                "-r", engine.rootfsDir.absolutePath,
+                                "/usr/bin/env", "-i",
+                                "HOME=/root", "USER=root", "TERM=xterm-256color",
+                                "/bin/bash", "--login",
+                            )
+                            session.startSession(cmd)
+                        }
+                        session.writeCommand(input)
+                        input = ""
+                    }
+                }
+            ),
+        )
     }
 }

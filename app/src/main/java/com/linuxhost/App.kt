@@ -9,7 +9,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 
-class LinuxHostApp : Application()
+class LinuxHostApp : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        initKoin(this)
+    }
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
