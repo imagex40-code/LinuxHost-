@@ -174,6 +174,10 @@ class ProotEngine(private val context: Context) {
     }
 
     suspend fun updatePackages() = withContext(Dispatchers.IO) {
+        if (!canRun()) {
+            _progress.emit(Progress(0, "Ubuntu is not installed"))
+            return@withContext
+        }
         _progress.emit(Progress(0, "Running apt update && apt upgrade -y..."))
         try {
             val output = runCommandWithOutput(prootBashCommand("apt update && apt upgrade -y"))
@@ -186,6 +190,10 @@ class ProotEngine(private val context: Context) {
     }
 
     suspend fun repair() = withContext(Dispatchers.IO) {
+        if (!canRun()) {
+            _progress.emit(Progress(0, "Ubuntu is not installed"))
+            return@withContext
+        }
         _progress.emit(Progress(0, "Starting system repair..."))
         try {
             val cmds = listOf(
@@ -235,18 +243,26 @@ class ProotEngine(private val context: Context) {
         )
     }
 
+    private fun canRun(): Boolean = prootBin.exists() && rootfsDir.exists()
+
     suspend fun executeCommand(command: String): String = withContext(Dispatchers.IO) {
         runCommand(prootBashCommand(command))
     }
 
     suspend fun getPackageCount(): Int = withContext(Dispatchers.IO) {
-        val output = runCommand(prootBashCommand("dpkg --list 2>/dev/null | wc -l"))
-        (output.toIntOrNull()?.minus(5))?.coerceAtLeast(0) ?: 0
+        if (!canRun()) return@withContext 0
+        try {
+            val output = runCommand(prootBashCommand("dpkg --list 2>/dev/null | wc -l"))
+            (output.toIntOrNull()?.minus(5))?.coerceAtLeast(0) ?: 0
+        } catch (_: Exception) { 0 }
     }
 
     suspend fun getPendingUpdates(): Int = withContext(Dispatchers.IO) {
-        val output = runCommand(prootBashCommand("apt list --upgradable 2>/dev/null | wc -l"))
-        (output.toIntOrNull()?.minus(1))?.coerceAtLeast(0) ?: 0
+        if (!canRun()) return@withContext 0
+        try {
+            val output = runCommand(prootBashCommand("apt list --upgradable 2>/dev/null | wc -l"))
+            (output.toIntOrNull()?.minus(1))?.coerceAtLeast(0) ?: 0
+        } catch (_: Exception) { 0 }
     }
 
     private fun prootBashCommand(command: String): List<String> = buildList {
