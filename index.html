@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LinuxHost — UI Mockup</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0d1117;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    padding: 20px;
+  }
+
+  .phone {
+    width: 393px;
+    height: 852px;
+    background: #0d1117;
+    border-radius: 48px;
+    padding: 14px;
+    box-shadow: 0 0 0 2px #30363d, 0 20px 60px rgba(0,0,0,0.5);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .screen {
+    flex: 1;
+    background: #0d1117;
+    border-radius: 36px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+  }
+
+  .status-bar {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 24px 4px;
+    color: #8b949e;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .status-bar .time { font-weight: 700; color: #e6edf3; }
+  .status-icons { display: flex; gap: 6px; align-items: center; }
+  .status-icons span { font-size: 11px; }
+
+  .content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 16px 4px;
+    scrollbar-width: thin;
+    scrollbar-color: #21262d transparent;
+  }
+  .content::-webkit-scrollbar { width: 3px; }
+  .content::-webkit-scrollbar-thumb { background: #21262d; border-radius: 2px; }
+
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  /* ===== DASHBOARD ===== */
+  .status-card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 16px;
+    padding: 16px;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .status-card .info h2 { color: #e6edf3; font-size: 18px; font-weight: 600; }
+  .status-card .info p { color: #8b949e; font-size: 13px; margin-top: 2px; }
+  .status-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: #0d5332;
+    color: #3fb950;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .status-badge .dot { width: 8px; height: 8px; border-radius: 50%; background: #3fb950; }
+
+  .section-title {
+    color: #8b949e;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin: 16px 0 8px;
+  }
+
+  .storage-card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 16px;
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+  .storage-header { display: flex; justify-content: space-between; margin-bottom: 10px; }
+  .storage-header .label { color: #8b949e; font-size: 13px; }
+  .storage-header .value { color: #e6edf3; font-size: 13px; font-weight: 600; }
+  .progress-bar {
+    height: 8px;
+    background: #21262d;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    width: 40%;
+    background: linear-gradient(90deg, #238636, #2ea043);
+    border-radius: 4px;
+    transition: width 0.3s;
+  }
+  .storage-breakdown { margin-top: 10px; }
+  .breakdown-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+    font-size: 12px;
+  }
+  .breakdown-item .name { color: #8b949e; }
+  .breakdown-item .size { color: #e6edf3; }
+  .breakdown-item .bar {
+    width: 100%;
+    height: 3px;
+    background: #21262d;
+    border-radius: 2px;
+    margin-top: 2px;
+  }
+  .breakdown-item .bar-fill { height: 100%; border-radius: 2px; }
+  .bar-rootfs { width: 55%; background: #1f6feb; }
+  .bar-apt { width: 15%; background: #d29922; }
+  .bar-logs { width: 8%; background: #8b949e; }
+  .bar-temp { width: 7%; background: #f85149; }
+  .bar-python { width: 10%; background: #a371f7; }
+  .bar-node { width: 3%; background: #3fb950; }
+  .bar-git { width: 2%; background: #f0883e; }
+
+  .stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .stat-card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    padding: 14px;
+    text-align: center;
+  }
+  .stat-card .number { color: #e6edf3; font-size: 24px; font-weight: 700; }
+  .stat-card .label { color: #8b949e; font-size: 11px; margin-top: 2px; }
+  .stat-card .sub { color: #3fb950; font-size: 11px; margin-top: 2px; }
+
+  .quick-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .action-btn {
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 12px;
+    color: #e6edf3;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: center;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .action-btn:hover { background: #30363d; }
+  .action-btn.primary { background: #238636; border-color: #2ea043; }
+  .action-btn.primary:hover { background: #2ea043; }
+  .action-btn.danger { color: #f85149; }
+  .action-btn.danger:hover { background: #3d1217; border-color: #f85149; }
+
+  /* ===== TERMINAL ===== */
+  .terminal-tabs {
+    display: flex;
+    gap: 0;
+    background: #0d1117;
+    border-bottom: 1px solid #30363d;
+    margin-bottom: 0;
+  }
+  .terminal-tab {
+    padding: 8px 16px;
+    font-size: 12px;
+    color: #8b949e;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+  }
+  .terminal-tab.active {
+    color: #e6edf3;
+    border-bottom-color: #3fb950;
+    background: #161b22;
+  }
+  .terminal-window {
+    background: #0a0e14;
+    border: 1px solid #30363d;
+    border-radius: 0 0 12px 12px;
+    padding: 12px;
+    font-family: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    min-height: 280px;
+    margin-bottom: 12px;
+  }
+  .terminal-line { color: #abb2bf; word-break: break-all; }
+  .terminal-line .prompt { color: #98c379; }
+  .terminal-line .path { color: #61afef; }
+  .terminal-line .cmd { color: #e5c07b; }
+  .terminal-line .output { color: #abb2bf; }
+  .terminal-line .cursor {
+    display: inline-block;
+    width: 8px;
+    height: 16px;
+    background: #528bff;
+    animation: blink 1s step-end infinite;
+    vertical-align: text-bottom;
+    margin-left: 2px;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  .terminal-input-row {
+    display: flex;
+    align-items: center;
+    margin-top: 4px;
+  }
+  .terminal-input-row .prompt { color: #98c379; margin-right: 8px; }
+  .terminal-input-row input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: #e5c07b;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    outline: none;
+  }
+
+  /* ===== MANAGER ===== */
+  .manager-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .manager-card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 14px;
+    padding: 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.15s;
+    position: relative;
+  }
+  .manager-card:hover { border-color: #58a6ff; background: #1c2128; }
+  .manager-card .icon { font-size: 28px; margin-bottom: 6px; }
+  .manager-card .name { color: #e6edf3; font-size: 14px; font-weight: 600; }
+  .manager-card .desc { color: #8b949e; font-size: 11px; margin-top: 2px; }
+  .manager-card .badge {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    font-size: 9px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 600;
+  }
+  .badge-installed { background: #0d5332; color: #3fb950; }
+  .badge-notinstalled { background: #3d1217; color: #f85149; }
+  .card-apt { border-left: 3px solid #1f6feb; }
+  .card-launch { border-left: 3px solid #3fb950; }
+  .card-stop { border-left: 3px solid #d29922; }
+  .card-update { border-left: 3px solid #a371f7; }
+  .card-repair { border-left: 3px solid #f0883e; }
+  .card-remove { border-left: 3px solid #f85149; }
+
+  .info-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid #21262d;
+    font-size: 13px;
+  }
+  .info-row:last-child { border-bottom: none; }
+  .info-row .label { color: #8b949e; }
+  .info-row .value { color: #e6edf3; }
+
+  .ubuntu-info-card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 16px;
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+
+  /* ===== SETTINGS ===== */
+  .settings-group {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 14px;
+    overflow: hidden;
+    margin-bottom: 12px;
+  }
+  .setting-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 16px;
+    border-bottom: 1px solid #21262d;
+    cursor: pointer;
+  }
+  .setting-item:last-child { border-bottom: none; }
+  .setting-item .left .title { color: #e6edf3; font-size: 14px; }
+  .setting-item .left .sub { color: #8b949e; font-size: 11px; margin-top: 2px; }
+  .setting-item .right { color: #8b949e; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+
+  .toggle {
+    width: 44px;
+    height: 24px;
+    background: #21262d;
+    border-radius: 12px;
+    position: relative;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .toggle.on { background: #238636; }
+  .toggle .knob {
+    width: 20px;
+    height: 20px;
+    background: #e6edf3;
+    border-radius: 50%;
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    transition: transform 0.2s;
+  }
+  .toggle.on .knob { transform: translateX(20px); }
+
+  .version-info {
+    text-align: center;
+    padding: 20px 0;
+    color: #484f58;
+    font-size: 11px;
+  }
+
+  /* ===== BOTTOM NAV ===== */
+  .bottom-nav {
+    display: flex;
+    background: #0d1117;
+    border-top: 1px solid #30363d;
+    padding: 6px 0 12px;
+  }
+  .nav-item {
+    flex: 1;
+    text-align: center;
+    padding: 4px 0;
+    cursor: pointer;
+    color: #484f58;
+    transition: color 0.15s;
+    font-size: 10px;
+  }
+  .nav-item .nav-icon { font-size: 22px; display: block; margin-bottom: 1px; }
+  .nav-item.active { color: #3fb950; }
+  .nav-item:hover { color: #8b949e; }
+
+  /* ===== DYNAMIC ===== */
+  .home-indicator {
+    width: 124px;
+    height: 4px;
+    background: #30363d;
+    border-radius: 2px;
+    margin: 4px auto 0;
+  }
+
+  .welcome-text {
+    color: #8b949e;
+    font-size: 12px;
+    margin-bottom: 4px;
+  }
+
+</style>
+</head>
+<body>
+
+<div class="phone">
+  <div class="screen">
+    <!-- Status Bar -->
+    <div class="status-bar">
+      <span class="time">12:34</span>
+      <div class="status-icons">
+        <span>...</span>
+        <span>WiFi</span>
+        <span>95%</span>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div class="content">
+
+      <!-- ===== TAB: DASHBOARD ===== -->
+      <div class="tab-content active" id="tab-dashboard">
+        <p class="welcome-text">Good morning, root</p>
+
+        <div class="status-card">
+          <div class="info">
+            <h2>Ubuntu 26.04</h2>
+            <p>Resolute Raccoon &middot; aarch64</p>
+          </div>
+          <div class="status-badge">
+            <span class="dot"></span> Running
+          </div>
+        </div>
+
+        <div class="storage-card">
+          <div class="storage-header">
+            <span class="label">Storage</span>
+            <span class="value">3.2 GB / 8.0 GB used</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill" style="width:40%"></div>
+          </div>
+          <div class="storage-breakdown">
+            <div class="breakdown-item">
+              <span class="name">RootFS</span>
+              <span class="size">1.8 GB</span>
+            </div>
+            <div class="bar"><div class="bar-fill bar-rootfs"></div></div>
+            <div class="breakdown-item" style="margin-top:6px">
+              <span class="name">APT Cache</span>
+              <span class="size">486 MB</span>
+            </div>
+            <div class="bar"><div class="bar-fill bar-apt"></div></div>
+            <div class="breakdown-item" style="margin-top:6px">
+              <span class="name">Logs</span>
+              <span class="size">256 MB</span>
+            </div>
+            <div class="bar"><div class="bar-fill bar-logs"></div></div>
+            <div class="breakdown-item" style="margin-top:6px">
+              <span class="name">Temp Files</span>
+              <span class="size">224 MB</span>
+            </div>
+            <div class="bar"><div class="bar-fill bar-temp"></div></div>
+            <div class="breakdown-item" style="margin-top:6px">
+              <span class="name">Python Packages</span>
+              <span class="size">320 MB</span>
+            </div>
+            <div class="bar"><div class="bar-fill bar-python"></div></div>
+          </div>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="number">1,847</div>
+            <div class="label">Packages</div>
+            <div class="sub">12 updates available</div>
+          </div>
+          <div class="stat-card">
+            <div class="number">3</div>
+            <div class="label">Active Sessions</div>
+            <div class="sub" style="color:#8b949e">PID 842, 921, 1043</div>
+          </div>
+        </div>
+
+        <div class="section-title">System Health</div>
+        <div class="status-card" style="padding:12px 16px">
+          <span style="color:#3fb950;font-weight:600">All systems healthy</span>
+          <span style="color:#8b949e;font-size:12px">Last check: 2 min ago</span>
+        </div>
+
+        <div class="section-title">Quick Actions</div>
+        <div class="quick-actions">
+          <div class="action-btn primary">Launch</div>
+          <div class="action-btn">Stop</div>
+          <div class="action-btn">Update</div>
+          <div class="action-btn">Repair</div>
+        </div>
+      </div>
+
+      <!-- ===== TAB: TERMINAL ===== -->
+      <div class="tab-content" id="tab-terminal">
+        <div class="terminal-tabs">
+          <div class="terminal-tab active">ubuntu@localhost</div>
+        </div>
+        <div class="terminal-window">
+          <div class="terminal-line">
+            <span class="prompt">root@localhost</span>:<span class="path">~</span><span class="cmd">$</span>
+            <span class="output">neofetch</span>
+          </div>
+          <div class="terminal-line">
+            <span class="output">OS: Ubuntu 26.04 LTS aarch64</span>
+          </div>
+          <div class="terminal-line">
+            <span class="output">Kernel: 6.17.0-PRoot-Distro</span>
+          </div>
+          <div class="terminal-line">
+            <span class="output">Packages: 1847 (dpkg)</span>
+          </div>
+          <div class="terminal-line">
+            <span class="output">Shell: bash 5.2.37</span>
+          </div>
+          <div class="terminal-line">
+            <span class="output">Uptime: 2 hours, 14 mins</span>
+          </div>
+          <div style="height:8px"></div>
+          <div class="terminal-line">
+            <span class="prompt">root@localhost</span>:<span class="path">~</span><span class="cmd">$</span>
+            <span class="output">apt update</span>
+          </div>
+          <div class="terminal-line">
+            <span class="output">Hit:1 http://archive.ubuntu.com noble InRelease</span>
+          </div>
+          <div class="terminal-line">
+            <span class="output">Reading package lists... Done</span>
+          </div>
+          <div class="terminal-line">
+            <span class="output">12 packages can be upgraded.</span>
+          </div>
+          <div style="height:8px"></div>
+          <div class="terminal-line">
+            <span class="prompt">root@localhost</span>:<span class="path">~</span><span class="cmd">$</span>
+            <span class="cursor"></span>
+          </div>
+        </div>
+        <div class="terminal-input-row">
+          <span class="prompt">root@localhost:~$</span>
+          <input type="text" placeholder="Type a command..." readonly>
+        </div>
+      </div>
+
+      <!-- ===== TAB: MANAGER ===== -->
+      <div class="tab-content" id="tab-manager">
+        <div class="ubuntu-info-card">
+          <div class="info-row">
+            <span class="label">Status</span>
+            <span class="value" style="color:#3fb950">Running</span>
+          </div>
+          <div class="info-row">
+            <span class="label">Version</span>
+            <span class="value">Ubuntu 26.04 LTS</span>
+          </div>
+          <div class="info-row">
+            <span class="label">Architecture</span>
+            <span class="value">aarch64</span>
+          </div>
+          <div class="info-row">
+            <span class="label">Uptime</span>
+            <span class="value">2h 14m</span>
+          </div>
+          <div class="info-row">
+            <span class="label">Rootfs Location</span>
+            <span class="value" style="font-size:11px">/data/data/.../ubuntu/</span>
+          </div>
+        </div>
+
+        <div class="section-title">Actions</div>
+        <div class="manager-grid">
+          <div class="manager-card card-apt">
+            <span class="badge badge-installed">Installed</span>
+            <div class="icon">Ubuntu</div>
+            <div class="name">Install</div>
+            <div class="desc">Fresh Ubuntu 26.04</div>
+          </div>
+          <div class="manager-card card-launch">
+            <div class="icon">▶</div>
+            <div class="name">Launch</div>
+            <div class="desc">Start Ubuntu session</div>
+          </div>
+          <div class="manager-card card-stop">
+            <div class="icon">⏹</div>
+            <div class="name">Stop</div>
+            <div class="desc">Shutdown all sessions</div>
+          </div>
+          <div class="manager-card card-update">
+            <div class="icon">↻</div>
+            <div class="name">Update</div>
+            <div class="desc">apt update &amp; upgrade</div>
+          </div>
+          <div class="manager-card card-repair">
+            <div class="icon">🔧</div>
+            <div class="name">Repair</div>
+            <div class="desc">Fix common issues</div>
+          </div>
+          <div class="manager-card card-remove">
+            <span class="badge badge-notinstalled">Danger</span>
+            <div class="icon">✕</div>
+            <div class="name">Remove</div>
+            <div class="desc">Wipe Ubuntu entirely</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== TAB: SETTINGS ===== -->
+      <div class="tab-content" id="tab-settings">
+        <div class="settings-group">
+          <div class="setting-item">
+            <div class="left">
+              <div class="title">Dark Theme</div>
+              <div class="sub">Use dark color scheme</div>
+            </div>
+            <div class="right">
+              <div class="toggle on">
+                <div class="knob"></div>
+              </div>
+            </div>
+          </div>
+          <div class="setting-item">
+            <div class="left">
+              <div class="title">Terminal Font Size</div>
+              <div class="sub">Current: 13px</div>
+            </div>
+            <div class="right">> 13</div>
+          </div>
+          <div class="setting-item">
+            <div class="left">
+              <div class="title">Keep Awake</div>
+              <div class="sub">Prevent screen sleep while running</div>
+            </div>
+            <div class="right">
+              <div class="toggle on">
+                <div class="knob"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-group">
+          <div class="setting-item">
+            <div class="left">
+              <div class="title">Storage Location</div>
+              <div class="sub">Internal storage</div>
+            </div>
+            <div class="right">> Internal</div>
+          </div>
+          <div class="setting-item">
+            <div class="left">
+              <div class="title">Auto-Update</div>
+              <div class="sub">Daily apt update check</div>
+            </div>
+            <div class="right">
+              <div class="toggle">
+                <div class="knob"></div>
+              </div>
+            </div>
+          </div>
+          <div class="setting-item">
+            <div class="left">
+              <div class="title">Backup Schedule</div>
+              <div class="sub">Weekly automatic backups</div>
+            </div>
+            <div class="right">> Weekly</div>
+          </div>
+        </div>
+
+        <div class="settings-group">
+          <div class="setting-item">
+            <div class="left">
+              <div class="title">About LinuxHost</div>
+              <div class="sub">Version 0.1.0</div>
+            </div>
+            <div class="right">></div>
+          </div>
+        </div>
+
+        <div class="version-info">
+          LinuxHost v0.1 &middot; Built for Termux + PRoot<br>
+          Made with for the Android Linux community
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Bottom Navigation -->
+    <div class="bottom-nav">
+      <div class="nav-item active" data-tab="dashboard">
+        <span class="nav-icon">⬡</span> Dashboard
+      </div>
+      <div class="nav-item" data-tab="terminal">
+        <span class="nav-icon">▣</span> Terminal
+      </div>
+      <div class="nav-item" data-tab="manager">
+        <span class="nav-icon">⋮⋮</span> Manager
+      </div>
+      <div class="nav-item" data-tab="settings">
+        <span class="nav-icon">⚙</span> Settings
+      </div>
+    </div>
+
+    <div class="home-indicator"></div>
+  </div>
+</div>
+
+<script>
+  document.querySelectorAll('.nav-item').forEach(item => {
+    item.addEventListener('click', () => {
+      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+      item.classList.add('active');
+      document.getElementById('tab-' + item.dataset.tab).classList.add('active');
+    });
+  });
+</script>
+
+</body>
+</html>
