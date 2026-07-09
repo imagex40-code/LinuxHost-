@@ -23,7 +23,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import org.koin.androidx.compose.koinInject
+import org.koin.compose.koinInject
 
 sealed class Screen(val route: String, val label: String, val icon: ImageVector) {
     data object Install : Screen("install", "", Icons.Filled.Dashboard)

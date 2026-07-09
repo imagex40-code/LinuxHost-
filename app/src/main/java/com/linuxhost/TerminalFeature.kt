@@ -38,7 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import org.koin.androidx.compose.koinInject
+import org.koin.compose.koinInject
 
 private val TerminalBg = Color(0xFF0A0E14)
 private val TerminalGreen = Color(0xFF98C379)

@@ -205,19 +205,20 @@ class ProotEngine(private val context: Context) {
     }
 
     suspend fun getStorageBreakdown(): StorageBreakdown = withContext(Dispatchers.IO) {
-        val rootfsBytes = du(rootfsDir)
-        val aptCacheBytes = du("$rootfsDir/var/cache/apt", "$rootfsDir/var/lib/apt")
-        val logsBytes = du("$rootfsDir/var/log")
-        val tempBytes = du("$rootfsDir/tmp")
+        val rootfsPath = rootfsDir.absolutePath
+        val rootfsBytes = du(rootfsPath)
+        val aptCacheBytes = du("$rootfsPath/var/cache/apt", "$rootfsPath/var/lib/apt")
+        val logsBytes = du("$rootfsPath/var/log")
+        val tempBytes = du("$rootfsPath/tmp")
         val pythonPackagesBytes = du(
-            "$rootfsDir/usr/lib/python3",
-            "$rootfsDir/usr/local/lib/python3",
+            "$rootfsPath/usr/lib/python3",
+            "$rootfsPath/usr/local/lib/python3",
         )
         val nodeModulesBytes = du(
-            "$rootfsDir/usr/lib/node_modules",
-            "$rootfsDir/usr/local/lib/node_modules",
+            "$rootfsPath/usr/lib/node_modules",
+            "$rootfsPath/usr/local/lib/node_modules",
         )
-        val gitProjectsBytes = du("$rootfsDir/root/git")
+        val gitProjectsBytes = du("$rootfsPath/root/git")
 
         val totalBytes = rootfsBytes + aptCacheBytes + logsBytes + tempBytes +
             pythonPackagesBytes + nodeModulesBytes + gitProjectsBytes
@@ -283,13 +284,13 @@ class ProotEngine(private val context: Context) {
     }
 
     private fun du(vararg paths: String): Long {
-        val existing = paths.filter { File(it).exists() }
-        if (existing.isEmpty()) return 0L
+        val existingPaths = paths.filter { File(it).exists() }
+        if (existingPaths.isEmpty()) return 0L
         val cmd = buildList {
             add("du")
             add("-sb")
             add("--total")
-            addAll(existing)
+            addAll(existingPaths)
         }
         return try {
             val output = runCommand(cmd)

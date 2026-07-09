@@ -61,7 +61,7 @@ dependencies {
 
     implementation(libs.koin.core)
     implementation(libs.koin.android)
-    implementation(libs.koin.androidx.compose)
+    implementation(libs.koin.compose)
 
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
