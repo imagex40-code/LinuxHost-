@@ -46,8 +46,15 @@ class ProotEngine(private val context: Context) {
 
     private val prootDownloadUrl: String get() =
         "https://skirsten.github.io/proot-portable-android-binaries/$arch/proot"
-    private val rootfsDownloadUrl: String get() =
-        "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04-base-${archStringMap[arch]}.tar.gz"
+    private val rootfsMirrors: List<String> get() {
+        val a = archStringMap[arch] ?: "arm64"
+        return listOf(
+            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-$a.tar.gz",
+            "https://cdimage.ubuntu.com/ubuntu-base/releases/noble/release/ubuntu-base-24.04.4-base-$a.tar.gz",
+            "https://ftpmirror.your.org/pub/ubuntu/cdimage/ubuntu-base/releases/24.04/release/ubuntu-base-24.04-base-$a.tar.gz",
+            "http://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-$a.tar.gz",
+        )
+    }
 
     private val _status = MutableStateFlow(InstanceStatus.NOT_INSTALLED)
     val status: StateFlow<InstanceStatus> = _status.asStateFlow()
@@ -101,15 +108,21 @@ class ProotEngine(private val context: Context) {
         _status.value = InstanceStatus.INSTALLING
         val tempFile = File(filesDir, "ubuntu-rootfs.tar.gz")
         _progress.emit(Progress(0, "Downloading Ubuntu rootfs..."))
-        try {
-            downloadFile(URL(rootfsDownloadUrl), tempFile)
-            _progress.emit(Progress(100, "Ubuntu rootfs downloaded"))
-            tempFile.absolutePath
-        } catch (e: Exception) {
-            _status.value = InstanceStatus.ERROR
-            _progress.emit(Progress(0, "Failed to download rootfs: ${e.message}"))
-            throw e
+        val errors = mutableListOf<String>()
+        for (urlStr in rootfsMirrors) {
+            try {
+                downloadFile(URL(urlStr), tempFile)
+                _progress.emit(Progress(100, "Ubuntu rootfs downloaded"))
+                return@withContext tempFile.absolutePath
+            } catch (e: Exception) {
+                errors.add("${e.message}")
+                tempFile.delete()
+            }
         }
+        _status.value = InstanceStatus.ERROR
+        val msg = "All mirrors failed:\n${errors.joinToString("\n")}"
+        _progress.emit(Progress(0, msg))
+        throw RuntimeException(msg)
     }
 
     suspend fun installRootfs(tarballPath: String) = withContext(Dispatchers.IO) {
