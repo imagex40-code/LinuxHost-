@@ -134,11 +134,22 @@ class ProotEngine(private val context: Context) {
             rootfsDir.mkdirs()
             _progress.emit(Progress(0, "Extracting rootfs (JVM), this may take a while..."))
 
-            extractTarGz(File(tarballPath), rootfsDir) { info, current, total ->
+            val skippedEntries = extractTarGz(File(tarballPath), rootfsDir) { info, current, total ->
                 val pct = if (total > 0) (current * 100 / total) else 0
                 _progress.emit(Progress(pct, "Extracting ${info.name}..."))
             }
             File(tarballPath).delete()
+
+            val essentialBins = listOf("bin/sh", "usr/bin/env", "bin/bash")
+            val missingBins = essentialBins.filter { !File(rootfsDir, it).exists() }
+            if (missingBins.isNotEmpty() || skippedEntries > 0) {
+                val reason = buildString {
+                    if (skippedEntries > 0) append("$skippedEntries entries could not be linked. ")
+                    if (missingBins.isNotEmpty()) append("Missing essential binaries: ${missingBins.joinToString()}")
+                }
+                rootfsDir.deleteRecursively()
+                throw RuntimeException("Rootfs extraction incomplete: $reason")
+            }
 
             val instance = UbuntuInstance(
                 id = "default",
@@ -168,13 +179,20 @@ class ProotEngine(private val context: Context) {
         val size: Long,
     )
 
+    private data class PendingLink(
+        val info: TarEntryInfo,
+        val outFile: File,
+    )
+
     private suspend fun extractTarGz(
         tarball: File,
         destDir: File,
         onEntry: suspend (TarEntryInfo, Int, Int) -> Unit = { _, _, _ -> },
-    ) {
+    ): Int {
         val totalEntries = countTarEntries(tarball)
         var current = 0
+        val pendingLinks = mutableListOf<PendingLink>()
+        var skippedEntries = 0
 
         BufferedInputStream(FileInputStream(tarball)).use { fileIn ->
             GZIPInputStream(fileIn).use { gzipIn ->
@@ -192,25 +210,8 @@ class ProotEngine(private val context: Context) {
                     when (info.typeFlag) {
                         TarType.DIRECTORY -> outFile.mkdirs()
 
-                        TarType.HARD_LINK -> {
-                            val linkTarget = File(destDir, info.linkName)
-                            if (linkTarget.exists()) {
-                                linkTarget.copyTo(outFile, overwrite = true)
-                            }
-                        }
-
-                        TarType.SYMLINK -> {
-                            if (!outFile.parentFile.exists()) outFile.parentFile.mkdirs()
-                            val success = try {
-                                val p = Runtime.getRuntime().exec(
-                                    arrayOf("ln", "-sf", info.linkName, outFile.absolutePath)
-                                )
-                                p.waitFor() == 0
-                            } catch (_: Exception) { false }
-                            if (!success) {
-                                val resolved = File(destDir, info.linkName)
-                                if (resolved.exists()) resolved.copyTo(outFile, overwrite = true)
-                            }
+                        TarType.HARD_LINK, TarType.SYMLINK -> {
+                            pendingLinks += PendingLink(info, outFile)
                         }
 
                         else -> {
@@ -231,6 +232,49 @@ class ProotEngine(private val context: Context) {
                 }
             }
         }
+
+        for (pending in pendingLinks) {
+            val info = pending.info
+            val outFile = pending.outFile
+
+            when (info.typeFlag) {
+                TarType.HARD_LINK -> {
+                    val linkTarget = File(destDir, info.linkName)
+                    if (linkTarget.exists()) {
+                        if (!outFile.parentFile.exists()) outFile.parentFile.mkdirs()
+                        linkTarget.copyTo(outFile, overwrite = true)
+                    } else {
+                        skippedEntries++
+                    }
+                }
+
+                TarType.SYMLINK -> {
+                    if (!outFile.parentFile.exists()) outFile.parentFile.mkdirs()
+                    val success = try {
+                        val p = Runtime.getRuntime().exec(
+                            arrayOf("ln", "-sf", info.linkName, outFile.absolutePath)
+                        )
+                        p.waitFor() == 0
+                    } catch (_: Exception) { false }
+                    if (!success) {
+                        val resolved = File(destDir, info.linkName)
+                        if (resolved.exists()) {
+                            resolved.copyTo(outFile, overwrite = true)
+                        } else {
+                            skippedEntries++
+                        }
+                    }
+                }
+            }
+
+            if (info.typeFlag != TarType.SYMLINK) {
+                outFile.setReadable(info.mode and 0b100_000_000L != 0L, false)
+                outFile.setWritable(info.mode and 0b010_000_000L != 0L, false)
+                outFile.setExecutable(info.mode and 0b001_000_000L != 0L, false)
+            }
+        }
+
+        return skippedEntries
     }
 
     private fun countTarEntries(tarball: File): Int {
