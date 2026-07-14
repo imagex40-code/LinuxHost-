@@ -134,9 +134,10 @@ class ProotEngine(private val context: Context) {
             rootfsDir.mkdirs()
             _progress.emit(Progress(0, "Extracting rootfs (JVM), this may take a while..."))
 
-            val skippedEntries = extractTarGz(File(tarballPath), rootfsDir) { info, current, total ->
-                val pct = if (total > 0) (current * 100 / total) else 0
-                _progress.emit(Progress(pct, "Extracting ${info.name}..."))
+            val skippedEntries =             var entryCount = 0
+            extractTarGz(File(tarballPath), rootfsDir) { info, _, _ ->
+                entryCount++
+                _progress.emit(Progress(0, "Extracting [$entryCount] ${info.name}..."))
             }
             File(tarballPath).delete()
 
@@ -372,6 +373,24 @@ class ProotEngine(private val context: Context) {
 
     suspend fun launch() = withContext(Dispatchers.IO) {
         try {
+            if (!prootBin.exists()) {
+                throw RuntimeException("PRoot binary not found at ${prootBin.absolutePath}")
+            }
+            if (!prootBin.canExecute()) {
+                prootBin.setExecutable(true)
+                if (!prootBin.canExecute()) {
+                    throw RuntimeException("PRoot binary is not executable: ${prootBin.absolutePath}")
+                }
+            }
+            if (!rootfsDir.exists()) {
+                throw RuntimeException("Rootfs directory not found at ${rootfsDir.absolutePath}")
+            }
+            val requiredPaths = listOf("bin/sh", "usr/bin/env", "bin/bash")
+            val missing = requiredPaths.filter { !File(rootfsDir, it).exists() }
+            if (missing.isNotEmpty()) {
+                throw RuntimeException("Rootfs is incomplete — missing: ${missing.joinToString()}")
+            }
+
             File(filesDir, "tmp").mkdirs()
             val cmd = buildList {
                 add(prootBin.absolutePath)
