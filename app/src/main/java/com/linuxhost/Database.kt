@@ -15,7 +15,7 @@ import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
 enum class InstanceStatus {
-    NOT_INSTALLED, INSTALLING, INSTALLED, RUNNING, STOPPED, ERROR
+    NOT_INSTALLED, INSTALLING, INSTALLED, RUNNING, STOPPED, ERROR, INTERRUPTED
 }
 
 enum class BackupType { FULL, SNAPSHOT }

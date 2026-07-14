@@ -82,11 +82,32 @@ class ProotEngine(private val context: Context) {
 
     suspend fun checkStatus() = withContext(Dispatchers.IO) {
         try {
-            when {
-                process?.isAlive == true -> _status.value = InstanceStatus.RUNNING
-                rootfsDir.exists() && prootBin.exists() -> _status.value = InstanceStatus.INSTALLED
-                rootfsDir.exists() -> _status.value = InstanceStatus.INSTALLING
-                else -> _status.value = InstanceStatus.NOT_INSTALLED
+            if (process?.isAlive == true) {
+                _status.value = InstanceStatus.RUNNING
+                return@withContext
+            }
+
+            val dbRecord = LinuxHostDatabase.get(context).instanceDao().get()
+
+            if (dbRecord?.status == InstanceStatus.INSTALLED) {
+                _status.value = if (rootfsDir.exists() && prootBin.exists()) {
+                    InstanceStatus.INSTALLED
+                } else {
+                    InstanceStatus.ERROR
+                }
+                return@withContext
+            }
+
+            if (rootfsDir.exists()) {
+                val essentialBins = listOf("bin/sh", "usr/bin/env", "bin/bash")
+                val hasAllBins = essentialBins.all { File(rootfsDir, it).exists() }
+                _status.value = if (hasAllBins && prootBin.exists()) {
+                    InstanceStatus.INSTALLED
+                } else {
+                    InstanceStatus.INTERRUPTED
+                }
+            } else {
+                _status.value = InstanceStatus.NOT_INSTALLED
             }
         } catch (e: Exception) {
             _status.value = InstanceStatus.ERROR
@@ -135,9 +156,10 @@ class ProotEngine(private val context: Context) {
             _progress.emit(Progress(0, "Extracting rootfs (JVM), this may take a while..."))
 
             var entryCount = 0
-            val skippedEntries = extractTarGz(File(tarballPath), rootfsDir) { info, _, _ ->
+            val skippedEntries = extractTarGz(File(tarballPath), rootfsDir) { info, _, total ->
                 entryCount++
-                _progress.emit(Progress(0, "Extracting [$entryCount] ${info.name}..."))
+                val pct = if (total > 0) (entryCount * 100 / total).coerceIn(0, 100) else 0
+                _progress.emit(Progress(pct, "Extracting ${info.name}..."))
             }
             File(tarballPath).delete()
 
@@ -435,6 +457,20 @@ class ProotEngine(private val context: Context) {
             process = null
         }
         _status.value = InstanceStatus.STOPPED
+    }
+
+    suspend fun cleanupInterrupted() = withContext(Dispatchers.IO) {
+        try {
+            if (rootfsDir.exists()) {
+                rootfsDir.deleteRecursively()
+            }
+            prootBin.delete()
+            LinuxHostDatabase.get(context).instanceDao().deleteAll()
+            _status.value = InstanceStatus.NOT_INSTALLED
+        } catch (e: Exception) {
+            _status.value = InstanceStatus.ERROR
+            throw e
+        }
     }
 
     suspend fun remove() = withContext(Dispatchers.IO) {

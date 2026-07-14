@@ -58,6 +58,8 @@ class InstallViewModel(private val engine: ProotEngine) : ViewModel() {
     private val _state = MutableStateFlow<InstallUiState>(InstallUiState.Idle)
     val state: StateFlow<InstallUiState> = _state.asStateFlow()
 
+    val engineStatus = engine.status
+
     private var downloadStartTime = 0L
 
     fun startInstallation() {
@@ -112,6 +114,19 @@ class InstallViewModel(private val engine: ProotEngine) : ViewModel() {
         reset()
         startInstallation()
     }
+
+    fun cleanupAndRetry() {
+        viewModelScope.launch {
+            try {
+                engine.cleanupInterrupted()
+                _state.value = InstallUiState.Idle
+            } catch (e: Exception) {
+                _state.value = InstallUiState.Error(
+                    e.message ?: "Cleanup failed. Please try again."
+                )
+            }
+        }
+    }
 }
 
 private val steps = listOf("Download", "Extract", "Configure", "Done")
@@ -131,7 +146,10 @@ fun InstallScreen(
     viewModel: InstallViewModel = koinViewModel(),
 ) {
     val state by viewModel.state.collectAsState()
+    val engineStatus by viewModel.engineStatus.collectAsState()
     val currentStep = remember(state) { stepIndex(state) }
+
+    val isInterrupted = engineStatus == InstanceStatus.INTERRUPTED && state is InstallUiState.Idle
 
     Box(
         modifier = Modifier
@@ -167,19 +185,22 @@ fun InstallScreen(
 
             Spacer(Modifier.height(32.dp))
 
-            if (state !is InstallUiState.Error) {
+            if (state !is InstallUiState.Error && !isInterrupted) {
                 StepIndicator(currentStep = currentStep)
                 Spacer(Modifier.height(24.dp))
             }
 
-            when (val s = state) {
-                is InstallUiState.Idle -> IdleContent(onGetStarted = viewModel::startInstallation)
-                is InstallUiState.Downloading -> DownloadingContent(s)
-                is InstallUiState.Extracting -> ExtractingContent(s)
-                is InstallUiState.Configuring -> ConfiguringContent()
-                is InstallUiState.Complete -> CompleteContent(onLaunchDashboard = onLaunchDashboard)
-                is InstallUiState.Error -> ErrorContent(
-                    message = s.message,
+            when {
+                isInterrupted -> InterruptedContent(
+                    onCleanup = viewModel::cleanupAndRetry,
+                )
+                state is InstallUiState.Idle -> IdleContent(onGetStarted = viewModel::startInstallation)
+                state is InstallUiState.Downloading -> DownloadingContent(state as InstallUiState.Downloading)
+                state is InstallUiState.Extracting -> ExtractingContent(state as InstallUiState.Extracting)
+                state is InstallUiState.Configuring -> ConfiguringContent()
+                state is InstallUiState.Complete -> CompleteContent(onLaunchDashboard = onLaunchDashboard)
+                state is InstallUiState.Error -> ErrorContent(
+                    message = (state as InstallUiState.Error).message,
                     onRetry = viewModel::retry,
                 )
             }
@@ -231,6 +252,50 @@ private fun StepIndicator(currentStep: Int) {
                         ),
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun InterruptedContent(onCleanup: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Error,
+            contentDescription = "Interrupted",
+            modifier = Modifier.size(64.dp),
+            tint = LinuxWarning,
+        )
+        Spacer(Modifier.height(16.dp))
+        Text(
+            "Previous Install Interrupted",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "A previous installation didn't finish.\nPartial files are still on disk.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(24.dp))
+        Button(
+            onClick = onCleanup,
+            colors = ButtonDefaults.buttonColors(containerColor = LinuxDanger),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp),
+        ) {
+            Text(
+                "Clean Up & Start Fresh",
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 16.sp,
+            )
         }
     }
 }
