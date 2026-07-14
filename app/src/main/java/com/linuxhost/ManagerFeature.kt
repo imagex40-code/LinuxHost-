@@ -152,6 +152,7 @@ private fun InfoCard(status: InstanceStatus) {
         InstanceStatus.INSTALLED -> "Installed" to LinuxInfo
         InstanceStatus.INSTALLING -> "Installing..." to LinuxWarning
         InstanceStatus.ERROR -> "Error" to LinuxDanger
+        InstanceStatus.INTERRUPTED -> "Interrupted" to LinuxWarning
         InstanceStatus.NOT_INSTALLED -> "Not Installed" to Color.Gray
     }
 
