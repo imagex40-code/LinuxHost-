@@ -14,8 +14,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
-import org.apache.commons.compress.archivers.tar.TarArchiveEntry
-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import java.io.FileInputStream
 import java.io.BufferedInputStream
 import java.util.zip.GZIPInputStream
@@ -136,9 +134,9 @@ class ProotEngine(private val context: Context) {
             rootfsDir.mkdirs()
             _progress.emit(Progress(0, "Extracting rootfs (JVM), this may take a while..."))
 
-            extractTarGz(File(tarballPath), rootfsDir) { entry, current, total ->
+            extractTarGz(File(tarballPath), rootfsDir) { info, current, total ->
                 val pct = if (total > 0) (current * 100 / total) else 0
-                _progress.emit(Progress(pct, "Extracting ${entry.name}..."))
+                _progress.emit(Progress(pct, "Extracting ${info.name}..."))
             }
             File(tarballPath).delete()
 
@@ -162,62 +160,74 @@ class ProotEngine(private val context: Context) {
         }
     }
 
+    private data class TarEntryInfo(
+        val name: String,
+        val typeFlag: Byte,
+        val linkName: String,
+        val mode: Int,
+        val size: Long,
+    )
+
     private fun extractTarGz(
         tarball: File,
         destDir: File,
-        onEntry: (TarArchiveEntry, Int, Int) -> Unit = { _, _, _ -> },
+        onEntry: (TarEntryInfo, Int, Int) -> Unit = { _, _, _ -> },
     ) {
         val totalEntries = countTarEntries(tarball)
         var current = 0
 
         BufferedInputStream(FileInputStream(tarball)).use { fileIn ->
             GZIPInputStream(fileIn).use { gzipIn ->
-                TarArchiveInputStream(gzipIn).use { tarIn ->
-                    var entry: TarArchiveEntry? = tarIn.nextTarEntry
-                    while (entry != null) {
-                        current++
-                        onEntry(entry, current, totalEntries)
+                val buf = ByteArray(512)
+                while (true) {
+                    if (!readFull(gzipIn, buf)) break
+                    if (buf.all { it == 0.toByte() }) break
 
-                        val outFile = File(destDir, entry.name)
+                    val info = parseTarHeader(buf) ?: continue
+                    current++
+                    onEntry(info, current, totalEntries)
 
-                        if (entry.isDirectory) {
-                            outFile.mkdirs()
-                        } else if (entry.isLink) {
-                            val linkTarget = File(destDir, entry.linkName)
+                    val outFile = File(destDir, info.name)
+
+                    when (info.typeFlag) {
+                        TarType.DIRECTORY -> outFile.mkdirs()
+
+                        TarType.HARD_LINK -> {
+                            val linkTarget = File(destDir, info.linkName)
                             if (linkTarget.exists()) {
                                 linkTarget.copyTo(outFile, overwrite = true)
                             }
-                        } else if (entry.isSymbolicLink) {
-                            if (!outFile.parentFile.exists()) {
-                                outFile.parentFile.mkdirs()
-                            }
+                        }
+
+                        TarType.SYMLINK -> {
+                            if (!outFile.parentFile.exists()) outFile.parentFile.mkdirs()
                             val success = try {
                                 val p = Runtime.getRuntime().exec(
-                                    arrayOf("ln", "-sf", entry.linkName, outFile.absolutePath)
+                                    arrayOf("ln", "-sf", info.linkName, outFile.absolutePath)
                                 )
                                 p.waitFor() == 0
                             } catch (_: Exception) { false }
                             if (!success) {
-                                val resolved = File(destDir, entry.linkName)
-                                if (resolved.exists()) {
-                                    resolved.copyTo(outFile, overwrite = true)
-                                }
-                            }
-                        } else {
-                            if (!outFile.parentFile.exists()) {
-                                outFile.parentFile.mkdirs()
-                            }
-                            outFile.outputStream().use { out ->
-                                tarIn.copyTo(out)
+                                val resolved = File(destDir, info.linkName)
+                                if (resolved.exists()) resolved.copyTo(outFile, overwrite = true)
                             }
                         }
 
-                        outFile.setReadable(entry.permissions and 0b100_000_000 != 0, false)
-                        outFile.setWritable(entry.permissions and 0b010_000_000 != 0, false)
-                        outFile.setExecutable(entry.permissions and 0b001_000_000 != 0, false)
-
-                        entry = tarIn.nextTarEntry
+                        else -> {
+                            if (!outFile.parentFile.exists()) outFile.parentFile.mkdirs()
+                            outFile.outputStream().use { out ->
+                                copyExact(gzipIn, out, info.size)
+                            }
+                        }
                     }
+
+                    if (info.typeFlag != TarType.SYMLINK) {
+                        outFile.setReadable(info.mode and 0b100_000_000 != 0, false)
+                        outFile.setWritable(info.mode and 0b010_000_000 != 0, false)
+                        outFile.setExecutable(info.mode and 0b001_000_000 != 0, false)
+                    }
+
+                    skipPadding(gzipIn, info.size)
                 }
             }
         }
@@ -227,12 +237,93 @@ class ProotEngine(private val context: Context) {
         var count = 0
         BufferedInputStream(FileInputStream(tarball)).use { fileIn ->
             GZIPInputStream(fileIn).use { gzipIn ->
-                TarArchiveInputStream(gzipIn).use { tarIn ->
-                    while (tarIn.nextTarEntry != null) count++
+                val buf = ByteArray(512)
+                while (readFull(gzipIn, buf)) {
+                    if (buf.all { it == 0.toByte() }) break
+                    val info = parseTarHeader(buf) ?: continue
+                    count++
+                    skipPadding(gzipIn, info.size)
                 }
             }
         }
         return count
+    }
+
+    private fun readFull(input: GZIPInputStream, buf: ByteArray): Boolean {
+        var offset = 0
+        while (offset < buf.size) {
+            val read = input.read(buf, offset, buf.size - offset)
+            if (read == -1) return offset > 0
+            offset += read
+        }
+        return true
+    }
+
+    private fun parseTarHeader(header: ByteArray): TarEntryInfo? {
+        if (header[257] != 'u'.code.toByte() || header[258] != 's'.code.toByte()) {
+            val allZero = header.all { it == 0.toByte() }
+            if (allZero) return null
+        }
+
+        val name = readTarString(header, 0, 100).trim('\u0000')
+        if (name.isEmpty()) return null
+
+        val mode = readTarOctal(header, 100, 8)
+        val size = readTarOctal(header, 124, 12)
+        val typeFlag = header[156]
+        val linkName = readTarString(header, 157, 100).trim('\u0000')
+
+        val prefix = readTarString(header, 345, 155).trim('\u0000')
+        val fullName = if (prefix.isNotEmpty()) "$prefix/$name" else name
+
+        return TarEntryInfo(
+            name = fullName,
+            typeFlag = typeFlag,
+            linkName = linkName,
+            mode = mode,
+            size = size,
+        )
+    }
+
+    private fun readTarString(buf: ByteArray, offset: Int, len: Int): String {
+        val end = (offset until offset + len).firstOrNull { buf[it] == 0.toByte() } ?: (offset + len)
+        return String(buf, offset, end - offset, Charsets.US_ASCII)
+    }
+
+    private fun readTarOctal(buf: ByteArray, offset: Int, len: Int): Long {
+        val str = readTarString(buf, offset, len).trim()
+        if (str.isEmpty()) return 0L
+        return try {
+            str.toLong(8)
+        } catch (_: Exception) { 0L }
+    }
+
+    private fun copyExact(input: GZIPInputStream, output: FileOutputStream, size: Long) {
+        var remaining = size
+        val buf = ByteArray(8192)
+        while (remaining > 0) {
+            val toRead = minOf(buf.size.toLong(), remaining).toInt()
+            val read = input.read(buf, 0, toRead)
+            if (read == -1) break
+            output.write(buf, 0, read)
+            remaining -= read
+        }
+    }
+
+    private fun skipPadding(input: GZIPInputStream, size: Long) {
+        val remainder = size % 512
+        if (remainder == 0L) return
+        val padding = (512 - remainder).toInt()
+        val skipBuf = ByteArray(padding)
+        readFull(input, skipBuf)
+    }
+
+    private object TarType {
+        const val REGULAR_FILE: Byte = 0
+        const val REGULAR_FILE_ALT: Byte = '0'.code.toByte()
+        const val HARD_LINK: Byte = '1'.code.toByte()
+        const val SYMLINK: Byte = '2'.code.toByte()
+        const val DIRECTORY: Byte = '5'.code.toByte()
     }
 
     suspend fun launch() = withContext(Dispatchers.IO) {
