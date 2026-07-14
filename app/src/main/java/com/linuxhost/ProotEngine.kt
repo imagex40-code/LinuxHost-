@@ -134,8 +134,8 @@ class ProotEngine(private val context: Context) {
             rootfsDir.mkdirs()
             _progress.emit(Progress(0, "Extracting rootfs (JVM), this may take a while..."))
 
-            val skippedEntries =             var entryCount = 0
-            extractTarGz(File(tarballPath), rootfsDir) { info, _, _ ->
+            var entryCount = 0
+            val skippedEntries = extractTarGz(File(tarballPath), rootfsDir) { info, _, _ ->
                 entryCount++
                 _progress.emit(Progress(0, "Extracting [$entryCount] ${info.name}..."))
             }
