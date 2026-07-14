@@ -16,6 +16,7 @@ class TerminalSession(private val context: Context) {
     private var process: Process? = null
     private var writer: OutputStream? = null
     private var reader: InputStream? = null
+    private var readerScope: CoroutineScope? = null
     private var readerJob: Job? = null
 
     private val _lines = MutableStateFlow<List<TerminalLine>>(emptyList())
@@ -33,7 +34,8 @@ class TerminalSession(private val context: Context) {
             writer = p.outputStream
             reader = p.inputStream
 
-            readerJob = CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
+            readerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+            readerJob = readerScope!!.launch {
                 try {
                     reader?.bufferedReader()?.use { bufferedReader ->
                         var line: String?
@@ -73,6 +75,9 @@ class TerminalSession(private val context: Context) {
 
     fun stopSession() {
         readerJob?.cancel()
+        readerScope?.cancel()
+        readerScope = null
+        readerJob = null
         try {
             writer?.close()
             reader?.close()

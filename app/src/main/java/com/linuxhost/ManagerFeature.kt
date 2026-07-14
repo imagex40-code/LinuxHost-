@@ -41,10 +41,12 @@ import org.koin.compose.koinInject
 @Composable
 fun ManagerScreen() {
     val engine = koinInject<ProotEngine>()
+    val context = koinInject<android.content.Context>()
     val status by engine.status.collectAsState()
     val scope = rememberCoroutineScope()
     var showProgress by remember { mutableStateOf(false) }
     var progressState by remember { mutableStateOf(Progress()) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) { engine.checkStatus() }
 
@@ -79,7 +81,17 @@ fun ManagerScreen() {
                     val tarball = engine.downloadRootfs()
                     engine.installRootfs(tarball)
                     engine.checkStatus()
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    errorMessage = e.message ?: "Installation failed"
+                    LinuxHostDatabase.get(context).instanceDao().upsert(
+                        UbuntuInstance(
+                            id = "default",
+                            status = InstanceStatus.ERROR,
+                            name = "Ubuntu 24.04",
+                            version = "24.04",
+                        )
+                    )
+                    engine.checkStatus()
                 } finally {
                     showProgress = false
                 }
@@ -115,6 +127,19 @@ fun ManagerScreen() {
                 }
             },
             confirmButton = {},
+        )
+    }
+
+    errorMessage?.let { msg ->
+        AlertDialog(
+            onDismissRequest = { errorMessage = null },
+            title = { Text("Installation Failed") },
+            text = { Text(msg) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { errorMessage = null }) {
+                    Text("OK")
+                }
+            },
         )
     }
 }
@@ -179,14 +204,15 @@ private fun ActionGrid(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            val installEnabled = status == InstanceStatus.NOT_INSTALLED || status == InstanceStatus.ERROR
             ActionCard(
                 modifier = Modifier.weight(1f),
                 icon = "\uD83D\uDCD6",
-                name = "Install",
-                desc = "Fresh Ubuntu 26.04",
-                accentColor = Color(0xFF1F6FEB),
+                name = if (status == InstanceStatus.ERROR) "Retry Install" else "Install",
+                desc = if (status == InstanceStatus.ERROR) "Retry after failure" else "Fresh Ubuntu 24.04",
+                accentColor = if (status == InstanceStatus.ERROR) LinuxDanger else Color(0xFF1F6FEB),
                 onClick = onInstall,
-                enabled = status == InstanceStatus.NOT_INSTALLED,
+                enabled = installEnabled,
             )
             ActionCard(
                 modifier = Modifier.weight(1f),

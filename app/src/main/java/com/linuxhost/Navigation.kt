@@ -12,9 +12,12 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.navigation.NavDestination.Companion.hierarchy
@@ -48,6 +51,17 @@ fun AppNavigation() {
 
     val engine = koinInject<ProotEngine>()
     val status by engine.status.collectAsState()
+
+    var previousStatus by remember { mutableStateOf(status) }
+    LaunchedEffect(status) {
+        if (previousStatus in listOf(InstanceStatus.NOT_INSTALLED, InstanceStatus.INSTALLING) &&
+            status !in listOf(InstanceStatus.NOT_INSTALLED, InstanceStatus.INSTALLING)) {
+            navController.navigate(Screen.Dashboard.route) {
+                popUpTo(Screen.Install.route) { inclusive = true }
+            }
+        }
+        previousStatus = status
+    }
 
     val startRoute = when (status) {
         InstanceStatus.NOT_INSTALLED, InstanceStatus.INSTALLING -> Screen.Install.route

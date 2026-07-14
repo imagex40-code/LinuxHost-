@@ -143,6 +143,18 @@ class ProotEngine(private val context: Context) {
             _progress.emit(Progress(0, "Extracting rootfs, this may take a while..."))
             runCommand(listOf("tar", "-xf", tarballPath, "-C", rootfsDir.absolutePath))
             File(tarballPath).delete()
+
+            val instance = UbuntuInstance(
+                id = "default",
+                name = "Ubuntu 24.04",
+                status = InstanceStatus.INSTALLED,
+                rootfsPath = rootfsDir.absolutePath,
+                sizeBytes = rootfsDir.walkTopDown().filter { it.isFile }.sumOf { it.length() },
+                version = "24.04",
+                installedAt = System.currentTimeMillis(),
+            )
+            LinuxHostDatabase.get(context).instanceDao().upsert(instance)
+
             _progress.emit(Progress(100, "Rootfs extracted successfully"))
             _status.value = InstanceStatus.INSTALLED
         } catch (e: Exception) {
@@ -346,18 +358,8 @@ class ProotEngine(private val context: Context) {
     private fun du(vararg paths: String): Long {
         val existingPaths = paths.filter { File(it).exists() }
         if (existingPaths.isEmpty()) return 0L
-        val cmd = buildList {
-            add("du")
-            add("-sb")
-            add("--total")
-            addAll(existingPaths)
-        }
-        return try {
-            val output = runCommand(cmd)
-            val lastLine = output.lines().lastOrNull() ?: return 0L
-            lastLine.split("\\s+".toRegex()).firstOrNull()?.toLongOrNull() ?: 0L
-        } catch (_: Exception) {
-            0L
+        return existingPaths.sumOf { path ->
+            File(path).walkTopDown().filter { it.isFile }.sumOf { it.length() }
         }
     }
 
