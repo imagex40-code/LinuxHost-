@@ -164,14 +164,14 @@ class ProotEngine(private val context: Context) {
         val name: String,
         val typeFlag: Byte,
         val linkName: String,
-        val mode: Int,
+        val mode: Long,
         val size: Long,
     )
 
-    private fun extractTarGz(
+    private suspend fun extractTarGz(
         tarball: File,
         destDir: File,
-        onEntry: (TarEntryInfo, Int, Int) -> Unit = { _, _, _ -> },
+        onEntry: suspend (TarEntryInfo, Int, Int) -> Unit = { _, _, _ -> },
     ) {
         val totalEntries = countTarEntries(tarball)
         var current = 0
@@ -222,9 +222,9 @@ class ProotEngine(private val context: Context) {
                     }
 
                     if (info.typeFlag != TarType.SYMLINK) {
-                        outFile.setReadable(info.mode and 0b100_000_000 != 0, false)
-                        outFile.setWritable(info.mode and 0b010_000_000 != 0, false)
-                        outFile.setExecutable(info.mode and 0b001_000_000 != 0, false)
+                        outFile.setReadable(info.mode and 0b100_000_000L != 0L, false)
+                        outFile.setWritable(info.mode and 0b010_000_000L != 0L, false)
+                        outFile.setExecutable(info.mode and 0b001_000_000L != 0L, false)
                     }
 
                     skipPadding(gzipIn, info.size)
