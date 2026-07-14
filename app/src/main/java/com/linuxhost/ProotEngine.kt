@@ -14,6 +14,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import java.io.FileInputStream
+import java.io.BufferedInputStream
+import java.util.zip.GZIPInputStream
 
 data class StorageBreakdown(
     val rootfsBytes: Long = 0,
@@ -128,20 +133,13 @@ class ProotEngine(private val context: Context) {
     suspend fun installRootfs(tarballPath: String) = withContext(Dispatchers.IO) {
         _status.value = InstanceStatus.INSTALLING
         try {
-            File(filesDir, "tmp").mkdirs()
-            val hasTar = try {
-                Runtime.getRuntime().exec("which tar").also { it.waitFor() }.exitValue() == 0
-            } catch (_: Exception) {
-                false
-            }
-            if (!hasTar) {
-                val msg = "tar not found. Install it with: pkg install tar"
-                _progress.emit(Progress(0, msg))
-                throw RuntimeException(msg)
-            }
             rootfsDir.mkdirs()
-            _progress.emit(Progress(0, "Extracting rootfs, this may take a while..."))
-            runCommand(listOf("tar", "-xf", tarballPath, "-C", rootfsDir.absolutePath))
+            _progress.emit(Progress(0, "Extracting rootfs (JVM), this may take a while..."))
+
+            extractTarGz(File(tarballPath), rootfsDir) { entry, current, total ->
+                val pct = if (total > 0) (current * 100 / total) else 0
+                _progress.emit(Progress(pct, "Extracting ${entry.name}..."))
+            }
             File(tarballPath).delete()
 
             val instance = UbuntuInstance(
@@ -162,6 +160,79 @@ class ProotEngine(private val context: Context) {
             _progress.emit(Progress(0, "Failed to extract rootfs: ${e.message}"))
             throw e
         }
+    }
+
+    private fun extractTarGz(
+        tarball: File,
+        destDir: File,
+        onEntry: (TarArchiveEntry, Int, Int) -> Unit = { _, _, _ -> },
+    ) {
+        val totalEntries = countTarEntries(tarball)
+        var current = 0
+
+        BufferedInputStream(FileInputStream(tarball)).use { fileIn ->
+            GZIPInputStream(fileIn).use { gzipIn ->
+                TarArchiveInputStream(gzipIn).use { tarIn ->
+                    var entry: TarArchiveEntry? = tarIn.nextTarEntry
+                    while (entry != null) {
+                        current++
+                        onEntry(entry, current, totalEntries)
+
+                        val outFile = File(destDir, entry.name)
+
+                        if (entry.isDirectory) {
+                            outFile.mkdirs()
+                        } else if (entry.isLink) {
+                            val linkTarget = File(destDir, entry.linkName)
+                            if (linkTarget.exists()) {
+                                linkTarget.copyTo(outFile, overwrite = true)
+                            }
+                        } else if (entry.isSymbolicLink) {
+                            if (!outFile.parentFile.exists()) {
+                                outFile.parentFile.mkdirs()
+                            }
+                            val success = try {
+                                val p = Runtime.getRuntime().exec(
+                                    arrayOf("ln", "-sf", entry.linkName, outFile.absolutePath)
+                                )
+                                p.waitFor() == 0
+                            } catch (_: Exception) { false }
+                            if (!success) {
+                                val resolved = File(destDir, entry.linkName)
+                                if (resolved.exists()) {
+                                    resolved.copyTo(outFile, overwrite = true)
+                                }
+                            }
+                        } else {
+                            if (!outFile.parentFile.exists()) {
+                                outFile.parentFile.mkdirs()
+                            }
+                            outFile.outputStream().use { out ->
+                                tarIn.copyTo(out)
+                            }
+                        }
+
+                        outFile.setReadable(entry.permissions and 0b100_000_000 != 0, false)
+                        outFile.setWritable(entry.permissions and 0b010_000_000 != 0, false)
+                        outFile.setExecutable(entry.permissions and 0b001_000_000 != 0, false)
+
+                        entry = tarIn.nextTarEntry
+                    }
+                }
+            }
+        }
+    }
+
+    private fun countTarEntries(tarball: File): Int {
+        var count = 0
+        BufferedInputStream(FileInputStream(tarball)).use { fileIn ->
+            GZIPInputStream(fileIn).use { gzipIn ->
+                TarArchiveInputStream(gzipIn).use { tarIn ->
+                    while (tarIn.nextTarEntry != null) count++
+                }
+            }
+        }
+        return count
     }
 
     suspend fun launch() = withContext(Dispatchers.IO) {
