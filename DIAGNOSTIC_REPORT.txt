@@ -1,0 +1,436 @@
+================================================================================
+          LINUXHOST CODEBASE DIAGNOSTIC REPORT
+          Generated: 2026-07-15
+          Last commit: 94330de (fix: proot binary path + stop auto-navigating)
+================================================================================
+
+================================================================================
+ 1. ARCHITECTURE OVERVIEW
+================================================================================
+
+FILE TREE — app/src/main/
+─────────────────────────────────────────────────────────────────────────────
+assets/
+  bin/proot                    236KB Termux ARM64 proot binary (copied to filesDir at runtime)
+  libexec/proot/loader          18KB Termux proot loader (copied to filesDir at runtime)
+
+java/com/linuxhost/
+  App.kt                        MainActivity + LinuxHostApp (Koin init)
+  AppModule.kt                  Koin DI module (singletons for Engine, DB, Session)
+  Database.kt                   Room DB: 5 entities, 5 DAOs, InstanceStatus enum
+  ProotInstaller.kt             Copies proot+loader from assets to filesDir, path helpers
+  RootfsExtractor.kt            Custom tar/gzip parser, strip detection, extraction, fixups
+  ProotCommandBuilder.kt        Builds proot CLI argv with all binds and flags
+  ProotEngine.kt                Core engine: download, install, launch, stop, repair, status
+  InstallFeature.kt             Install wizard UI + InstallViewModel
+  DashboardFeature.kt           Dashboard UI: status, storage, stats, health, quick actions
+  ManagerFeature.kt             Manager UI: install/launch/stop/update/repair/remove actions
+  TerminalFeature.kt            Terminal emulator UI
+  TerminalSession.kt            Process management: starts proot, reads stdout, 500-line cap
+  Navigation.kt                 Bottom nav (5 screens), auto-routing based on status
+  SettingsFeature.kt            Settings UI (theme, font, toggles — mostly placeholder)
+  Theme.kt                      Color palette + MaterialTheme
+
+res/                            Launcher icons, colors.xml, strings.xml
+AndroidManifest.xml             INTERNET, STORAGE permissions, cleartext traffic allowed
+
+ACTUAL BINARY PATHS (confirmed on filesystem):
+  /storage/emulated/0/projects/opencode/LinuxHost/app/src/main/assets/bin/proot
+      EXISTS: YES, 236,008 bytes
+  /storage/emulated/0/projects/opencode/LinuxHost/app/src/main/assets/libexec/proot/loader
+      EXISTS: YES, 18,136 bytes
+  /storage/emulated/0/projects/opencode/LinuxHost/app/src/main/jniLibs/
+      EXISTS: NO (deleted — was causing extraction failures)
+
+CONNECTIVITY DIAGRAM:
+─────────────────────────────────────────────────────────────────────────────
+  ProotInstaller                — static paths + asset→filesDir copy
+       │
+       ▼
+  RootfsExtractor               — downloads tarball, two-pass extraction, fixups
+       │
+       ▼
+  ProotCommandBuilder           — builds proot argv with all flags/binds
+       │
+       ▼
+  ProotEngine                   — orchestrates install/launch/stop lifecycle
+       │          │
+       ▼          ▼
+  UI Layer: InstallFeature  ManagerFeature  DashboardFeature  TerminalFeature
+                    │                                        │
+                    ▼                                        ▼
+              InstallViewModel                        TerminalSession (Process)
+                    │                                        │
+                    ▼                                        ▼
+              ProotEngine ←────────────────────── ProotEngine
+                                                          │
+                                                          ▼
+                                                    Database.kt (Room)
+
+  Koin wires: ProotEngine (single), TerminalSession (single),
+              InstallViewModel (factory), all DAOs (single)
+
+================================================================================
+ 2. INSTALL FLOW TRACE
+================================================================================
+
+Trigger: User taps "Get Started" on Install screen
+         → InstallViewModel.startInstallation()
+
+STEP 1: engine.downloadRootfs()
+  Location:   ProotEngine.kt:157
+  What:       Sets status=INSTALLING. Iterates rootfsMirrors (4 URLs, Ubuntu
+              24.04 base tar.gz for detected arch). Downloads via
+              RootfsExtractor.downloadFile() to filesDir/ubuntu-rootfs.tar.gz.
+              Emits Progress(pct, "Downloading...") for UI.
+  Fails if:   All 4 mirrors unreachable, disk full, HTTP error, redirect loop.
+  Error path: Sets status=ERROR, emits progress with error message, throws.
+  Caught:     YES — InstallViewModel catches and sets InstallUiState.Error.
+
+STEP 2: engine.installRootfs(tarballPath)
+  Location:   ProotEngine.kt:113
+  What:       Sets status=INSTALLING.
+  Sub-step 2a: ProotInstaller.ensureInstalled(context)
+      Location: ProotInstaller.kt:17
+      What:     Copies assets/bin/proot → filesDir/proot (chmod +x).
+                Copies assets/libexec/proot/loader → filesDir/libexec/proot/loader (chmod +x).
+                Creates filesDir/tmp/.
+      Fails if: Asset file missing, disk full, I/O error.
+      Error path: IOException propagates up. Caught by InstallViewModel.
+      NOTE: No logging of resolved paths. If this fails, user sees generic
+            "Installation failed" with no details about which file was missing.
+
+  Sub-step 2b: RootfsExtractor.extract(tarball, rootfsDir)
+      Location: RootfsExtractor.kt:59
+      What:     Pass 1: scanAllMembers() — opens tarball, reads all 512-byte
+                headers to collect member names. Calls detectStripCount() on
+                the first 500 entries to determine how many leading path
+                components to strip.
+                Pass 2: reopens tarball, extracts each entry to rootfsDir with
+                the detected strip count. Directories get mkdirs(), files get
+                copyExact(), hardlinks/symlinks are queued for deferred resolution.
+      Fails if:  Tarball corrupt, OOM, disk full, tar format unrecognized,
+                 gzip detection wrong.
+      Error path: IOException propagates. Caught by InstallViewModel.
+      KNOWN ISSUE: Symlink targets that don't exist are silently skipped
+                   (no error thrown). Hardlink targets missing are also skipped.
+                   This means broken symlinks will be lost, but won't crash.
+
+  Sub-step 2c: RootfsExtractor.postExtractionFixups(rootfsDir)
+      Location: RootfsExtractor.kt:292
+      What:     Writes /etc/resolv.conf (8.8.8.8, 8.8.4.4).
+                Writes /etc/hosts (localhost entries).
+                Calls registerAndroidIds() — appends current UID to
+                /etc/passwd and /etc/shadow as "linuxhost" user.
+                Creates /tmp with execute permission.
+      Fails if:  File permission denied (silently caught).
+      Error path: Exceptions in registerAndroidIds are silently swallowed.
+
+  Sub-step 2d: Essential binary check
+      Location: ProotEngine.kt:129
+      What:     Checks bin/sh, usr/bin/env, bin/bash exist in rootfsDir.
+                If ANY missing: deletes entire rootfsDir, throws RuntimeException.
+      Fails if:  Extraction was incomplete or strip count was wrong.
+      Error path: RuntimeException propagates. Caught by InstallViewModel.
+
+STEP 3: Database upsert
+  Location:   ProotEngine.kt:135
+  What:       Creates UbuntuInstance with status=INSTALLED, rootfsPath,
+              sizeBytes, version="24.04", installedAt timestamp.
+              Upserts into Room DB.
+  Fails if:   Room write error (extremely unlikely).
+  Error path: Caught by InstallViewModel.
+
+STEP 4: Status update
+  Location:   ProotEngine.kt:148
+  What:       _status.value = InstanceStatus.INSTALLED
+  This triggers Navigation.kt LaunchedEffect:
+    previousStatus=INSTALLING, status=INSTALLED (in successStates)
+    → navigates to Dashboard screen with popUpTo Install (inclusive).
+
+STEP 5: UI transition
+  InstallViewModel state goes: Downloading → Extracting → Configuring → Complete
+  Then Navigation.kt auto-navigates to Dashboard.
+
+TOTAL FAILURE POINTS IN INSTALL FLOW:
+  1. Download failure (all mirrors) — CAUGHT, shown in UI
+  2. ProotInstaller asset copy failure — CAUGHT, but error message is generic
+  3. Tarball extraction failure — CAUGHT, shown in UI
+  4. Missing essential binaries after extraction — CAUGHT, rootfs deleted, error shown
+  5. DB write failure — CAUGHT, extremely unlikely
+  6. Navigation auto-route — FIXED (was bouncing on ERROR, now stays on Install)
+
+WHAT IS NOT CAUGHT OR LOGGED:
+  - ProotInstaller: no log of which file was missing or where it looked
+  - RootfsExtractor: symlink/hardlink resolution failures are silent
+  - registerAndroidIds: all exceptions swallowed silently
+  - No logcat output at any point in the install flow
+
+================================================================================
+ 3. LAUNCH FLOW TRACE
+================================================================================
+
+Trigger: User taps "Launch" on Dashboard or Manager
+         → engine.launch()
+
+STEP 1: Pre-flight checks
+  Location:   ProotEngine.kt:186-195
+  What:       ProotInstaller.ensureInstalled(context) — re-copies proot+loader
+              if missing or non-executable.
+              Checks rootfsDir.exists(), checks bin/sh, usr/bin/env, bin/bash.
+  Fails if:   Rootfs missing, proot binary missing, incomplete rootfs.
+  Error path: RuntimeException("Rootfs directory not found...") or
+              RuntimeException("Rootfs is incomplete — missing: ...").
+              Sets status=ERROR, re-throws.
+
+STEP 2: Build proot command
+  Location:   ProotEngine.kt:196-199
+  What:       Calls ProotCommandBuilder.buildLoginCommand():
+              ProotCommandBuilder.kt:8
+
+  ACTUAL ARGV BUILT (aarch64 device):
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │ [0]  filesDir/proot                                                    │
+  │ [1]  --kill-on-exit                                                    │
+  │ [2]  --link2symlink                                                    │
+  │ [3]  --sysvipc                                                         │
+  │ [4]  -L                                                                │
+  │ [5]  --change-id=0:0                                                   │
+  │ [6]  --rootfs=/data/data/com.linuxhost.debug/files/containers/         │
+  │       ubuntu/rootfs                                                    │
+  │ [7]  --cwd=/root                                                       │
+  │ [8]  --bind=/dev                                                       │
+  │ [9]  --bind=/proc                                                      │
+  │ [10] --bind=/sys                                                       │
+  │ [11] --bind=/dev/urandom:/dev/random                                   │
+  │ [12] --bind=/proc/self/fd:/dev/fd  (if /dev/fd doesn't exist)         │
+  │ [13-15] --bind=/proc/self/fd/{0,1,2}:/dev/{stdin,stdout,stderr}       │
+  │        (only if /dev/{stdin,stdout,stderr} don't exist)                │
+  │ [16] --bind=/sdcard          (if /sdcard exists)                       │
+  │ [17] --bind=/storage/emulated/0  (if it exists)                        │
+  │ [18] --bind=/apex             (if it exists)                           │
+  │ [19] --bind=/system           (if it exists)                           │
+  │ [20] --bind=/vendor           (if it exists)                           │
+  │ [21] --kernel-release=\Linux\localhost\6.17.0-PRoot-Distro\             │
+  │        #1 SMP PREEMPT_DYNAMIC ...\aarch64\localdomain\-1\             │
+  │ [22] /bin/bash                                                          │
+  │ [23] --login                                                            │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  ENV VARS SET:
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │ PROOT_TMP_DIR = /data/data/com.linuxhost.debug/files/tmp               │
+  │ PROOT_LOADER  = /data/data/com.linuxhost.debug/files/                  │
+  │                  libexec/proot/loader                                   │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+STEP 3: Start process
+  Location:   ProotEngine.kt:201-207
+  What:       ProcessBuilder(cmd).start() with env vars set.
+              Stores process reference in processLock.
+              Sets status=RUNNING.
+  Fails if:   IOException (binary not executable, permission denied,
+              file not found, fork failure).
+  Error path: Sets status=ERROR, throws. Caught by caller.
+
+STEP 4: TerminalSession (if launched from Terminal tab)
+  Location:   TerminalFeature.kt:165-178
+  What:       Builds a DIFFERENT command via ProotCommandBuilder.buildCommand():
+              (not buildLoginCommand — uses /usr/bin/env -i with command string)
+  ENV VARS:   Same PROOT_TMP_DIR + PROOT_LOADER passed to session.startSession()
+  Process:    TerminalSession.startSession() → ProcessBuilder.start()
+              Reader coroutine reads stdout line-by-line into StateFlow<List<TerminalLine>>.
+
+PROBLEMS IN LAUNCH FLOW:
+  1. Two DIFFERENT proot commands are built for the same operation:
+     - Dashboard/Manager "Launch" uses buildLoginCommand() → /bin/bash --login
+     - Terminal "Send" uses buildCommand() → /usr/bin/env -i ... /bin/bash -c <command>
+     These use different argv, different binds, different behavior.
+
+  2. PROOT_LOADER env var: proot needs this to find the loader. If the loader
+     path is wrong or the loader binary is corrupt, proot silently fails with
+     a confusing error or segfault.
+
+  3. The loader binary at assets/libexec/proot/loader (18KB) was extracted from
+     the Termux proot .deb. It is a separate binary from proot itself — proot
+     calls it via execve(). If it's not executable or is corrupt, proot will
+     fail with "No such file or directory" or "Exec format error".
+
+  4. --kernel-release string contains literal backslashes. This is intentional
+     (proot expects this format), but it's fragile — if any character is wrong,
+     programs that call uname() may behave unexpectedly.
+
+  5. --bind=/dev/urandom:/dev/random — if /dev/urandom doesn't exist on the
+     host (some Android kernels), this will fail.
+
+  6. Storage binds: /sdcard and /storage/emulated/0 are bind-mounted read-write
+     by default. proot-distro uses read-only binds for these. We don't specify
+     :ro, which could cause permission issues in some Android versions.
+
+================================================================================
+ 4. KNOWN ISSUES STILL OPEN
+================================================================================
+
+ISSUE A: Proot binary extraction was failing (FIXED BUT NOT VERIFIED ON DEVICE)
+  Status:     Fixed in commit 94330de by moving from jniLibs to assets.
+  Why unverified: The CI build passed, but the user has not yet tested
+                  install on the real device with the new assets path.
+  Risk:       If assets/bin/proot is somehow not packaged into the APK
+              (extremely unlikely — assets are always included), this will
+              still fail. No runtime logging exists to confirm the path.
+  What could still be wrong: The proot binary itself might be incompatible
+              with the specific Android kernel version on the user's device.
+              The binary is from Termux (ARM64, static-ish build), but
+              proot uses ptrace() which requires specific kernel config.
+              Some OEM kernels disable ptrace for non-root users.
+
+ISSUE B: Navigation was bouncing on error (FIXED BUT NOT VERIFIED)
+  Status:     Fixed in commit 94330de. LaunchedEffect now only navigates
+              from INSTALLING → success states.
+  Why unverified: No device test.
+  Risk:       Low — the code logic is straightforward.
+
+ISSUE C: Symlink/hardlink resolution in RootfsExtractor is lossy
+  Status:     OPEN, unaddressed.
+  Impact:     Some symlinks in the rootfs will point to files that don't exist
+              (because the target was a hardlink that wasn't resolved, or the
+              target entry appeared later in the tar and was already passed).
+              This can break: /bin/sh (often a symlink to dash or bash),
+              /usr/bin/env, library symlinks.
+  Evidence:   The symlink resolution loop at the END of extract() tries to
+              copy symlink targets, but if the target file was never extracted
+              (because it was also a symlink, or appeared after the link),
+              the symlink becomes a dangling reference.
+  Consequence: This is the MOST LIKELY cause of "essential binary missing"
+               errors after extraction. The binaries exist in the tarball,
+               but their symlink chain is broken.
+
+ISSUE D: Two different proot command builders for the same operation
+  Status:     OPEN, by design but problematic.
+  Details:    buildLoginCommand() (Dashboard/Manager launch) vs
+              buildCommand() (Terminal) produce different argv.
+              The Terminal version uses /usr/bin/env -i which strips ALL
+              environment variables, then re-adds HOME/USER/TERM.
+              The Login version doesn't use env at all — it inherits the
+              ProcessBuilder environment (which includes PROOT_TMP_DIR etc.).
+  Consequence: Behavior difference between "Launch" and "Terminal" tabs.
+               The Login version will have Android env vars leaking in.
+
+ISSUE E: No logging anywhere in the critical path
+  Status:     OPEN.
+  Details:    ProotInstaller, RootfsExtractor, ProotEngine, TerminalSession
+              have ZERO Android Log.d/i/w/e calls. All error messages are
+              thrown as RuntimeExceptions and caught by ViewModel, but the
+              actual diagnostic info (which file, which path, what the OS
+              error was) is lost.
+  Consequence: When something fails on the device, the user sees "Installation
+               failed" or a generic message. There is no way to diagnose
+               without adding log statements.
+
+ISSUE F: ProotEngine.launch() doesn't start a shell session
+  Status:     OPEN.
+  Details:    ProotEngine.launch() (called from Dashboard "Launch" button)
+              starts a proot process with /bin/bash --login but does NOT
+              connect any stdin/stdout to it. The process starts and
+              immediately exits (no terminal attached, no pipe).
+              Only TerminalSession (from Terminal tab) properly manages
+              stdin/stdout.
+  Consequence: Tapping "Launch" on Dashboard will start proot, set status
+               to RUNNING, and then the process will immediately exit.
+               The user sees "Running" briefly, then nothing happens.
+               They have to go to Terminal tab to actually interact.
+
+ISSUE G: build.gradle.kts has no ndk.abiFilters
+  Status:     OPEN but low priority.
+  Details:    No abiFilters means the APK includes native libs for ALL ABIs
+              (arm64-v8a, armeabi-v7a, x86, x86_64). Since proot is now in
+              assets, this doesn't affect the proot binary. But if future
+              native libs are added, the APK will be bloated.
+
+ISSUE H: UbuntuBase rootfs URL version mismatch
+  Status:     OPEN.
+  Details:    ProotEngine rootfsMirrors list references "24.04.4" but the
+              Database.kt default version says "26.04". The actual download
+              URL is ubuntu-base-24.04.4-base-aarch64.tar.gz.
+  Consequence: Minor — DB says 26.04, actual rootfs is 24.04.4. Confusing
+               in the UI but doesn't break anything functionally.
+
+================================================================================
+ 5. WHAT HAS NEVER ACTUALLY SUCCEEDED END-TO-END
+================================================================================
+
+HONEST ASSESSMENT:
+
+A full install → Dashboard shows Installed → Launch → working shell prompt
+has NEVER been confirmed successful on the real device in this project's
+history.
+
+Here is what has actually been confirmed:
+
+  - CI builds: pass (builds compile successfully)
+  - Install flow: has been tested on device and PARTIALLY works — the download
+    completes, but extraction has failed repeatedly due to:
+    (a) The INTERRUPTED detection bug (now fixed)
+    (b) The navigation bug hiding error messages (now fixed)
+    (c) The proot binary not being found (now fixed — moved to assets)
+    (d) The progress percentage bug (now fixed)
+  - Rootfs extraction: has NEVER been confirmed to complete successfully on
+    the real device. We don't know if the custom tar parser handles the
+    actual Ubuntu rootfs tarball correctly. The two-pass strip detection
+    has not been validated. The symlink resolution has not been validated.
+  - Proot launch: has NEVER been confirmed to work. We don't know if the
+    Termux proot binary runs on the user's device kernel. We don't know
+    if PROOT_LOADER works. We don't know if the bind mounts are accepted
+    by the kernel.
+  - Terminal: has NEVER shown a working shell prompt.
+
+The project is at the "assemble the pieces and hope they fit" stage. No
+end-to-end flow has been validated on real hardware.
+
+================================================================================
+ 6. IMMEDIATE NEXT DIAGNOSTIC STEP
+================================================================================
+
+SINGLE MOST LIKELY REMAINING FAILURE POINT:
+
+  ProotInstaller.ensureInstalled() — the asset→filesDir copy.
+
+  Even though we moved proot to assets, we have ZERO runtime confirmation
+  that it actually works. If the copy fails (permission denied, disk full,
+  asset not found in APK), the error message is "Installation failed" with
+  no details.
+
+FASTEST WAY TO GET DIRECT EVIDENCE:
+
+  Option A (add logging — recommended):
+  Add Android Log statements to ProotInstaller.ensureInstalled() that log:
+    1. The source asset path being opened
+    2. The destination file path
+    3. File.exists() and File.canExecute() after copy
+    4. File size after copy
+  Then capture logcat while testing.
+
+  Option B (adb shell inspection — faster if you have adb access):
+  After install fails, run:
+    adb shell ls -la /data/data/com.linuxhost.debug/files/proot
+    adb shell ls -la /data/data/com.linuxhost.debug/files/libexec/proot/loader
+    adb shell ls -la /data/data/com.linuxhost.debug/files/containers/ubuntu/rootfs/
+    adb shell ls -la /data/data/com.linuxhost.debug/files/containers/ubuntu/rootfs/bin/sh
+    adb shell logcat -d | grep -i "linuxhost\|proot\|extract"
+
+  This tells you in 30 seconds:
+    - Whether proot was copied to filesDir (and is executable)
+    - Whether rootfs was extracted (and has essential bins)
+    - Any error messages from the process
+
+  Option C (if you don't have adb — add minimal logging to UI):
+  In ProotEngine.installRootfs(), after each sub-step, emit a Progress
+  with the step name and file path. This way the error dialog will show
+  exactly which step failed and what path it was trying to access.
+
+  RECOMMENDATION: Do Option B first (30 seconds, gives complete picture).
+  Then do Option A if more detail is needed.
+
+================================================================================
+                         END OF DIAGNOSTIC REPORT
+================================================================================
