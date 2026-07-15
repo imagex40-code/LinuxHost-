@@ -110,7 +110,7 @@ object RootfsExtractor {
                 }
                 TarType.SYMLINK -> {
                     outFile.parentFile?.mkdirs()
-                    try { java.nio.file.Files.delete(outFile.toPath()) } catch (_: Exception) {}
+                    try { android.system.Os.unlink(outFile.absolutePath) } catch (_: Exception) {}
                     android.system.Os.symlink(entry.linkName, outFile.absolutePath)
                 }
             }
