@@ -163,18 +163,16 @@ fun TerminalScreen() {
                 onSend = {
                     if (input.isNotBlank()) {
                         if (!isRunning) {
-                            val cmd = listOf(
-                                engine.prootBin.absolutePath, "-0", "--link2symlink",
-                                "-b", "/proc:/proc",
-                                "-b", "/sys:/sys",
-                                "-b", "/dev:/dev",
-                                "-b", "/sdcard:/sdcard",
-                                "-r", engine.rootfsDir.absolutePath,
-                                "/usr/bin/env", "-i",
-                                "HOME=/root", "USER=root", "TERM=xterm-256color",
-                                "/bin/bash", "--login",
+                            val cmd = ProotCommandBuilder.buildCommand(
+                                prootBin = engine.prootBin.absolutePath,
+                                rootfsDir = engine.rootfsDir.absolutePath,
+                                tmpDir = engine.tmpDir.absolutePath,
+                                command = input.ifBlank { "/bin/bash --login" },
                             )
-                            session.startSession(cmd)
+                            session.startSession(cmd, mapOf(
+                                "PROOT_TMP_DIR" to engine.tmpDir.absolutePath,
+                                "PROOT_LOADER" to engine.prootLoader.absolutePath,
+                            ))
                         }
                         session.writeCommand(input)
                         input = ""

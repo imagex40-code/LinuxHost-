@@ -25,10 +25,12 @@ class TerminalSession(private val context: Context) {
     private val _isRunning = MutableStateFlow(false)
     val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
 
-    fun startSession(prootCommand: List<String>): Boolean {
+    fun startSession(prootCommand: List<String>, env: Map<String, String> = emptyMap()): Boolean {
         return try {
             val pb = ProcessBuilder(prootCommand)
                 .redirectErrorStream(true)
+            val envMap = pb.environment()
+            env.forEach { (k, v) -> envMap[k] = v }
             val p = pb.start()
             process = p
             writer = p.outputStream

@@ -89,7 +89,6 @@ class InstallViewModel(private val engine: ProotEngine) : ViewModel() {
                     }
                 }
 
-                engine.downloadProotBinary()
                 val tarballPath = engine.downloadRootfs()
 
                 _state.value = InstallUiState.Extracting(0, "Extracting rootfs...")

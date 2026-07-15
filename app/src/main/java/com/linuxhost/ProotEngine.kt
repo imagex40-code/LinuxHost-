@@ -3,7 +3,6 @@ package com.linuxhost
 import android.content.Context
 import android.os.Build
 import java.io.File
-import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlinx.coroutines.Dispatchers
@@ -14,9 +13,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
-import java.io.FileInputStream
-import java.io.BufferedInputStream
-import java.util.zip.GZIPInputStream
 
 data class StorageBreakdown(
     val rootfsBytes: Long = 0,
@@ -47,8 +43,6 @@ class ProotEngine(private val context: Context) {
         }
     }
 
-    private val prootDownloadUrl: String get() =
-        "https://skirsten.github.io/proot-portable-android-binaries/$arch/proot"
     private val rootfsMirrors: List<String> get() {
         val a = archStringMap[arch] ?: "arm64"
         return listOf(
@@ -67,8 +61,11 @@ class ProotEngine(private val context: Context) {
 
     private var process: Process? = null
     private val filesDir: File = context.filesDir
-    val rootfsDir: File get() = File(filesDir, "ubuntu")
-    val prootBin: File get() = File(filesDir, "proot")
+
+    val prootBin: File get() = ProotInstaller.prootBin(context)
+    val rootfsDir: File get() = ProotInstaller.rootfsDir(context)
+    val prootLoader: File get() = ProotInstaller.prootLoader(context)
+    val tmpDir: File get() = ProotInstaller.tmpDir(context)
 
     private val processLock = Any()
 
@@ -88,9 +85,8 @@ class ProotEngine(private val context: Context) {
             }
 
             val dbRecord = LinuxHostDatabase.get(context).instanceDao().get()
-
             if (dbRecord?.status == InstanceStatus.INSTALLED) {
-                _status.value = if (rootfsDir.exists() && prootBin.exists()) {
+                _status.value = if (rootfsDir.exists() && prootBin.exists() && prootLoader.exists()) {
                     InstanceStatus.INSTALLED
                 } else {
                     InstanceStatus.ERROR
@@ -101,7 +97,7 @@ class ProotEngine(private val context: Context) {
             if (rootfsDir.exists()) {
                 val essentialBins = listOf("bin/sh", "usr/bin/env", "bin/bash")
                 val hasAllBins = essentialBins.all { File(rootfsDir, it).exists() }
-                _status.value = if (hasAllBins && prootBin.exists()) {
+                _status.value = if (hasAllBins && prootBin.exists() && prootLoader.exists()) {
                     InstanceStatus.INSTALLED
                 } else {
                     InstanceStatus.INTERRUPTED
@@ -114,64 +110,28 @@ class ProotEngine(private val context: Context) {
         }
     }
 
-    suspend fun downloadProotBinary() = withContext(Dispatchers.IO) {
-        _status.value = InstanceStatus.INSTALLING
-        _progress.emit(Progress(0, "Downloading PRoot binary..."))
-        try {
-            downloadFile(URL(prootDownloadUrl), prootBin)
-            prootBin.setExecutable(true)
-            _progress.emit(Progress(100, "PRoot binary downloaded and made executable"))
-        } catch (e: Exception) {
-            _status.value = InstanceStatus.ERROR
-            _progress.emit(Progress(0, "Failed to download PRoot: ${e.message}"))
-            throw e
-        }
-    }
-
-    suspend fun downloadRootfs(): String = withContext(Dispatchers.IO) {
-        _status.value = InstanceStatus.INSTALLING
-        val tempFile = File(filesDir, "ubuntu-rootfs.tar.gz")
-        _progress.emit(Progress(0, "Downloading Ubuntu rootfs..."))
-        val errors = mutableListOf<String>()
-        for (urlStr in rootfsMirrors) {
-            try {
-                downloadFile(URL(urlStr), tempFile)
-                _progress.emit(Progress(100, "Ubuntu rootfs downloaded"))
-                return@withContext tempFile.absolutePath
-            } catch (e: Exception) {
-                errors.add("${e.message}")
-                tempFile.delete()
-            }
-        }
-        _status.value = InstanceStatus.ERROR
-        val msg = "All mirrors failed:\n${errors.joinToString("\n")}"
-        _progress.emit(Progress(0, msg))
-        throw RuntimeException(msg)
-    }
-
     suspend fun installRootfs(tarballPath: String) = withContext(Dispatchers.IO) {
         _status.value = InstanceStatus.INSTALLING
         try {
-            rootfsDir.mkdirs()
-            _progress.emit(Progress(0, "Extracting rootfs (JVM), this may take a while..."))
+            ProotInstaller.ensureInstalled(context)
 
-            var entryCount = 0
-            val skippedEntries = extractTarGz(File(tarballPath), rootfsDir) { info, _, total ->
-                entryCount++
-                val pct = if (total > 0) (entryCount * 100 / total).coerceIn(0, 100) else 0
-                _progress.emit(Progress(pct, "Extracting ${info.name}..."))
+            rootfsDir.mkdirs()
+            _progress.emit(Progress(0, "Extracting rootfs, this may take a while..."))
+
+            RootfsExtractor.extract(File(tarballPath), rootfsDir) { name, current, total ->
+                val pct = if (total > 0) (current * 100 / total).coerceIn(0, 100) else 0
+                _progress.emit(Progress(pct, "Extracting $name..."))
             }
             File(tarballPath).delete()
 
+            _progress.emit(Progress(95, "Applying post-extraction fixups..."))
+            RootfsExtractor.postExtractionFixups(rootfsDir)
+
             val essentialBins = listOf("bin/sh", "usr/bin/env", "bin/bash")
             val missingBins = essentialBins.filter { !File(rootfsDir, it).exists() }
-            if (missingBins.isNotEmpty() || skippedEntries > 0) {
-                val reason = buildString {
-                    if (skippedEntries > 0) append("$skippedEntries entries could not be linked. ")
-                    if (missingBins.isNotEmpty()) append("Missing essential binaries: ${missingBins.joinToString()}")
-                }
+            if (missingBins.isNotEmpty()) {
                 rootfsDir.deleteRecursively()
-                throw RuntimeException("Rootfs extraction incomplete: $reason")
+                throw RuntimeException("Rootfs extraction incomplete — missing: ${missingBins.joinToString()}")
             }
 
             val instance = UbuntuInstance(
@@ -194,216 +154,36 @@ class ProotEngine(private val context: Context) {
         }
     }
 
-    private data class TarEntryInfo(
-        val name: String,
-        val typeFlag: Byte,
-        val linkName: String,
-        val mode: Long,
-        val size: Long,
-    )
-
-    private data class PendingLink(
-        val info: TarEntryInfo,
-        val outFile: File,
-    )
-
-    private suspend fun extractTarGz(
-        tarball: File,
-        destDir: File,
-        onEntry: suspend (TarEntryInfo, Int, Int) -> Unit = { _, _, _ -> },
-    ): Int {
-        val totalEntries = countTarEntries(tarball)
-        var current = 0
-        val pendingLinks = mutableListOf<PendingLink>()
-        var skippedEntries = 0
-
-        BufferedInputStream(FileInputStream(tarball)).use { fileIn ->
-            GZIPInputStream(fileIn).use { gzipIn ->
-                val buf = ByteArray(512)
-                while (true) {
-                    if (!readFull(gzipIn, buf)) break
-                    if (buf.all { it == 0.toByte() }) break
-
-                    val info = parseTarHeader(buf) ?: continue
-                    current++
-                    onEntry(info, current, totalEntries)
-
-                    val outFile = File(destDir, info.name)
-
-                    when (info.typeFlag) {
-                        TarType.DIRECTORY -> outFile.mkdirs()
-
-                        TarType.HARD_LINK, TarType.SYMLINK -> {
-                            pendingLinks += PendingLink(info, outFile)
-                        }
-
-                        else -> {
-                            if (!outFile.parentFile.exists()) outFile.parentFile.mkdirs()
-                            outFile.outputStream().use { out ->
-                                copyExact(gzipIn, out, info.size)
-                            }
-                        }
-                    }
-
-                    if (info.typeFlag != TarType.SYMLINK) {
-                        outFile.setReadable(info.mode and 0b100_000_000L != 0L, false)
-                        outFile.setWritable(info.mode and 0b010_000_000L != 0L, false)
-                        outFile.setExecutable(info.mode and 0b001_000_000L != 0L, false)
-                    }
-
-                    skipPadding(gzipIn, info.size)
-                }
-            }
-        }
-
-        for (pending in pendingLinks) {
-            val info = pending.info
-            val outFile = pending.outFile
-
-            when (info.typeFlag) {
-                TarType.HARD_LINK -> {
-                    val linkTarget = File(destDir, info.linkName)
-                    if (linkTarget.exists()) {
-                        if (!outFile.parentFile.exists()) outFile.parentFile.mkdirs()
-                        linkTarget.copyTo(outFile, overwrite = true)
-                    } else {
-                        skippedEntries++
+    suspend fun downloadRootfs(): String = withContext(Dispatchers.IO) {
+        _status.value = InstanceStatus.INSTALLING
+        val tempFile = File(filesDir, "ubuntu-rootfs.tar.gz")
+        _progress.emit(Progress(0, "Downloading Ubuntu rootfs..."))
+        val errors = mutableListOf<String>()
+        for (urlStr in rootfsMirrors) {
+            try {
+                RootfsExtractor.downloadFile(URL(urlStr), tempFile) { downloaded, total ->
+                    val pct = if (total > 0) (downloaded * 100 / total).coerceIn(0, 100).toInt() else 0
+                    runCatching {
+                        _progress.tryEmit(Progress(pct, "Downloading Ubuntu rootfs...", downloaded, total))
                     }
                 }
-
-                TarType.SYMLINK -> {
-                    if (!outFile.parentFile.exists()) outFile.parentFile.mkdirs()
-                    val success = try {
-                        val p = Runtime.getRuntime().exec(
-                            arrayOf("ln", "-sf", info.linkName, outFile.absolutePath)
-                        )
-                        p.waitFor() == 0
-                    } catch (_: Exception) { false }
-                    if (!success) {
-                        val resolved = File(destDir, info.linkName)
-                        if (resolved.exists()) {
-                            resolved.copyTo(outFile, overwrite = true)
-                        } else {
-                            skippedEntries++
-                        }
-                    }
-                }
-            }
-
-            if (info.typeFlag != TarType.SYMLINK) {
-                outFile.setReadable(info.mode and 0b100_000_000L != 0L, false)
-                outFile.setWritable(info.mode and 0b010_000_000L != 0L, false)
-                outFile.setExecutable(info.mode and 0b001_000_000L != 0L, false)
+                _progress.emit(Progress(100, "Ubuntu rootfs downloaded"))
+                return@withContext tempFile.absolutePath
+            } catch (e: Exception) {
+                errors.add("${e.message}")
+                tempFile.delete()
             }
         }
-
-        return skippedEntries
-    }
-
-    private fun countTarEntries(tarball: File): Int {
-        var count = 0
-        BufferedInputStream(FileInputStream(tarball)).use { fileIn ->
-            GZIPInputStream(fileIn).use { gzipIn ->
-                val buf = ByteArray(512)
-                while (readFull(gzipIn, buf)) {
-                    if (buf.all { it == 0.toByte() }) break
-                    val info = parseTarHeader(buf) ?: continue
-                    count++
-                    skipPadding(gzipIn, info.size)
-                }
-            }
-        }
-        return count
-    }
-
-    private fun readFull(input: GZIPInputStream, buf: ByteArray): Boolean {
-        var offset = 0
-        while (offset < buf.size) {
-            val read = input.read(buf, offset, buf.size - offset)
-            if (read == -1) return offset > 0
-            offset += read
-        }
-        return true
-    }
-
-    private fun parseTarHeader(header: ByteArray): TarEntryInfo? {
-        if (header[257] != 'u'.code.toByte() || header[258] != 's'.code.toByte()) {
-            val allZero = header.all { it == 0.toByte() }
-            if (allZero) return null
-        }
-
-        val name = readTarString(header, 0, 100).trim('\u0000')
-        if (name.isEmpty()) return null
-
-        val mode = readTarOctal(header, 100, 8)
-        val size = readTarOctal(header, 124, 12)
-        val typeFlag = header[156]
-        val linkName = readTarString(header, 157, 100).trim('\u0000')
-
-        val prefix = readTarString(header, 345, 155).trim('\u0000')
-        val fullName = if (prefix.isNotEmpty()) "$prefix/$name" else name
-
-        return TarEntryInfo(
-            name = fullName,
-            typeFlag = typeFlag,
-            linkName = linkName,
-            mode = mode,
-            size = size,
-        )
-    }
-
-    private fun readTarString(buf: ByteArray, offset: Int, len: Int): String {
-        val end = (offset until offset + len).firstOrNull { buf[it] == 0.toByte() } ?: (offset + len)
-        return String(buf, offset, end - offset, Charsets.US_ASCII)
-    }
-
-    private fun readTarOctal(buf: ByteArray, offset: Int, len: Int): Long {
-        val str = readTarString(buf, offset, len).trim()
-        if (str.isEmpty()) return 0L
-        return try {
-            str.toLong(8)
-        } catch (_: Exception) { 0L }
-    }
-
-    private fun copyExact(input: GZIPInputStream, output: FileOutputStream, size: Long) {
-        var remaining = size
-        val buf = ByteArray(8192)
-        while (remaining > 0) {
-            val toRead = minOf(buf.size.toLong(), remaining).toInt()
-            val read = input.read(buf, 0, toRead)
-            if (read == -1) break
-            output.write(buf, 0, read)
-            remaining -= read
-        }
-    }
-
-    private fun skipPadding(input: GZIPInputStream, size: Long) {
-        val remainder = size % 512
-        if (remainder == 0L) return
-        val padding = (512 - remainder).toInt()
-        val skipBuf = ByteArray(padding)
-        readFull(input, skipBuf)
-    }
-
-    private object TarType {
-        const val REGULAR_FILE: Byte = 0
-        const val REGULAR_FILE_ALT: Byte = '0'.code.toByte()
-        const val HARD_LINK: Byte = '1'.code.toByte()
-        const val SYMLINK: Byte = '2'.code.toByte()
-        const val DIRECTORY: Byte = '5'.code.toByte()
+        _status.value = InstanceStatus.ERROR
+        val msg = "All mirrors failed:\n${errors.joinToString("\n")}"
+        _progress.emit(Progress(0, msg))
+        throw RuntimeException(msg)
     }
 
     suspend fun launch() = withContext(Dispatchers.IO) {
         try {
-            if (!prootBin.exists()) {
-                throw RuntimeException("PRoot binary not found at ${prootBin.absolutePath}")
-            }
-            if (!prootBin.canExecute()) {
-                prootBin.setExecutable(true)
-                if (!prootBin.canExecute()) {
-                    throw RuntimeException("PRoot binary is not executable: ${prootBin.absolutePath}")
-                }
-            }
+            val paths = ProotInstaller.ensureInstalled(context)
+
             if (!rootfsDir.exists()) {
                 throw RuntimeException("Rootfs directory not found at ${rootfsDir.absolutePath}")
             }
@@ -413,31 +193,15 @@ class ProotEngine(private val context: Context) {
                 throw RuntimeException("Rootfs is incomplete — missing: ${missing.joinToString()}")
             }
 
-            File(filesDir, "tmp").mkdirs()
-            val cmd = buildList {
-                add(prootBin.absolutePath)
-                add("-0")
-                add("--link2symlink")
-                add("-b")
-                add("/proc:/proc")
-                add("-b")
-                add("/sys:/sys")
-                add("-b")
-                add("/dev:/dev")
-                add("-b")
-                add("/sdcard:/sdcard")
-                add("-r")
-                add(rootfsDir.absolutePath)
-                add("/usr/bin/env")
-                add("-i")
-                add("HOME=/root")
-                add("USER=root")
-                add("TERM=xterm-256color")
-                add("/bin/bash")
-                add("--login")
-            }
+            val cmd = ProotCommandBuilder.buildLoginCommand(
+                prootBin = paths.prootBin,
+                rootfsDir = rootfsDir.absolutePath,
+                tmpDir = paths.tmpDir,
+            )
+
             val pb = ProcessBuilder(cmd)
-            pb.environment()["PROOT_TMP_DIR"] = "${filesDir.absolutePath}/tmp"
+            pb.environment()["PROOT_TMP_DIR"] = paths.tmpDir
+            pb.environment()["PROOT_LOADER"] = paths.prootLoader
             pb.redirectErrorStream(true)
             val p = pb.start()
             synchronized(processLock) { process = p }
@@ -461,10 +225,10 @@ class ProotEngine(private val context: Context) {
 
     suspend fun cleanupInterrupted() = withContext(Dispatchers.IO) {
         try {
-            if (rootfsDir.exists()) {
-                rootfsDir.deleteRecursively()
+            val containersDir = ProotInstaller.containersDir(context)
+            if (containersDir.exists()) {
+                containersDir.deleteRecursively()
             }
-            prootBin.delete()
             LinuxHostDatabase.get(context).instanceDao().deleteAll()
             _status.value = InstanceStatus.NOT_INSTALLED
         } catch (e: Exception) {
@@ -476,8 +240,9 @@ class ProotEngine(private val context: Context) {
     suspend fun remove() = withContext(Dispatchers.IO) {
         try {
             stop()
-            if (rootfsDir.exists()) {
-                rootfsDir.deleteRecursively()
+            val containersDir = ProotInstaller.containersDir(context)
+            if (containersDir.exists()) {
+                containersDir.deleteRecursively()
             }
             val db = LinuxHostDatabase.get(context)
             db.instanceDao().deleteAll()
@@ -495,7 +260,7 @@ class ProotEngine(private val context: Context) {
         }
         _progress.emit(Progress(0, "Running apt update && apt upgrade -y..."))
         try {
-            val output = runCommandWithOutput(prootBashCommand("apt update && apt upgrade -y"))
+            val output = runCommandWithOutput(prootCommand("apt update && apt upgrade -y"))
             output.forEach { line -> _progress.emit(Progress(0, line)) }
             _progress.emit(Progress(100, "Package update complete"))
         } catch (e: Exception) {
@@ -517,7 +282,7 @@ class ProotEngine(private val context: Context) {
                 "apt update",
             )
             cmds.forEach { cmd ->
-                val output = runCommandWithOutput(prootBashCommand(cmd))
+                val output = runCommandWithOutput(prootCommand(cmd))
                 output.forEach { line -> _progress.emit(Progress(0, line)) }
             }
             _progress.emit(Progress(100, "Repair complete"))
@@ -558,16 +323,16 @@ class ProotEngine(private val context: Context) {
         )
     }
 
-    private fun canRun(): Boolean = prootBin.exists() && rootfsDir.exists()
+    private fun canRun(): Boolean = prootBin.exists() && rootfsDir.exists() && prootLoader.exists()
 
     suspend fun executeCommand(command: String): String = withContext(Dispatchers.IO) {
-        runCommand(prootBashCommand(command))
+        runCommand(prootCommand(command))
     }
 
     suspend fun getPackageCount(): Int = withContext(Dispatchers.IO) {
         if (!canRun()) return@withContext 0
         try {
-            val output = runCommand(prootBashCommand("dpkg --list 2>/dev/null | wc -l"))
+            val output = runCommand(prootCommand("dpkg --list 2>/dev/null | wc -l"))
             (output.toIntOrNull()?.minus(5))?.coerceAtLeast(0) ?: 0
         } catch (_: Exception) { 0 }
     }
@@ -575,26 +340,26 @@ class ProotEngine(private val context: Context) {
     suspend fun getPendingUpdates(): Int = withContext(Dispatchers.IO) {
         if (!canRun()) return@withContext 0
         try {
-            val output = runCommand(prootBashCommand("apt list --upgradable 2>/dev/null | wc -l"))
+            val output = runCommand(prootCommand("apt list --upgradable 2>/dev/null | wc -l"))
             (output.toIntOrNull()?.minus(1))?.coerceAtLeast(0) ?: 0
         } catch (_: Exception) { 0 }
     }
 
-    private fun prootBashCommand(command: String): List<String> = buildList {
-        add(prootBin.absolutePath)
-        add("-0")
-        add("--link2symlink")
-        add("-r")
-        add(rootfsDir.absolutePath)
-        add("/bin/bash")
-        add("-c")
-        add(command)
+    private fun prootCommand(command: String): List<String> {
+        val paths = ProotInstaller.ensureInstalled(context)
+        return ProotCommandBuilder.buildCommand(
+            prootBin = paths.prootBin,
+            rootfsDir = rootfsDir.absolutePath,
+            tmpDir = paths.tmpDir,
+            command = command,
+        )
     }
 
     private fun runCommand(cmd: List<String>, workingDir: File? = null): String {
         val pb = ProcessBuilder(cmd)
         pb.directory(workingDir)
-        pb.environment()["PROOT_TMP_DIR"] = "${filesDir.absolutePath}/tmp"
+        pb.environment()["PROOT_TMP_DIR"] = ProotInstaller.tmpDir(context).absolutePath
+        pb.environment()["PROOT_LOADER"] = ProotInstaller.prootLoader(context).absolutePath
         pb.redirectErrorStream(true)
         val p = pb.start()
         val output = p.inputStream.bufferedReader().readText().trim()
@@ -607,7 +372,8 @@ class ProotEngine(private val context: Context) {
 
     private fun runCommandWithOutput(cmd: List<String>): List<String> {
         val pb = ProcessBuilder(cmd)
-        pb.environment()["PROOT_TMP_DIR"] = "${filesDir.absolutePath}/tmp"
+        pb.environment()["PROOT_TMP_DIR"] = ProotInstaller.tmpDir(context).absolutePath
+        pb.environment()["PROOT_LOADER"] = ProotInstaller.prootLoader(context).absolutePath
         pb.redirectErrorStream(true)
         val p = pb.start()
         val reader = p.inputStream.bufferedReader()
@@ -621,37 +387,6 @@ class ProotEngine(private val context: Context) {
         if (existingPaths.isEmpty()) return 0L
         return existingPaths.sumOf { path ->
             File(path).walkTopDown().filter { it.isFile }.sumOf { it.length() }
-        }
-    }
-
-    private suspend fun downloadFile(url: URL, destination: File) {
-        try {
-            val connection = url.openConnection() as HttpURLConnection
-            connection.connectTimeout = 30_000
-            connection.readTimeout = 30_000
-            connection.instanceFollowRedirects = true
-            connection.connect()
-
-            val totalBytes = connection.contentLengthLong
-            var downloaded = 0L
-
-            connection.inputStream.use { input ->
-                FileOutputStream(destination).use { output ->
-                    val buffer = ByteArray(8192)
-                    var read: Int
-                    while (input.read(buffer).also { read = it } != -1) {
-                        output.write(buffer, 0, read)
-                        downloaded += read
-                        if (totalBytes > 0) {
-                            val pct = ((downloaded.toDouble() / totalBytes) * 100).toInt()
-                            _progress.emit(Progress(pct, "Downloading...", downloaded, totalBytes))
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            _progress.emit(Progress(0, "Network error: ${e.message}"))
-            throw e
         }
     }
 }

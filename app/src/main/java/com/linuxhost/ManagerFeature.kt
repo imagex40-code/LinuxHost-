@@ -77,7 +77,6 @@ fun ManagerScreen() {
             onInstall = { scope.launch {
                 showProgress = true
                 try {
-                    engine.downloadProotBinary()
                     val tarball = engine.downloadRootfs()
                     engine.installRootfs(tarball)
                     engine.checkStatus()
