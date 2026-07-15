@@ -110,15 +110,8 @@ object RootfsExtractor {
                 }
                 TarType.SYMLINK -> {
                     outFile.parentFile?.mkdirs()
-                    val target = File(entry.linkName)
-                    val resolved = if (target.isAbsolute) {
-                        File(rootfsDir, entry.linkName)
-                    } else {
-                        File(outFile.parentFile, entry.linkName)
-                    }
-                    if (resolved.exists()) {
-                        resolved.copyTo(outFile, overwrite = true)
-                    }
+                    if (outFile.exists()) outFile.delete()
+                    android.system.Os.symlink(entry.linkName, outFile.absolutePath)
                 }
             }
         }
@@ -251,10 +244,54 @@ ff02::3     ip6-allhosts
         }
     }
 
+    private fun writeFakeProcFiles(rootfsDir: File) {
+        val procDir = File(rootfsDir, "proc")
+        procDir.mkdirs()
+
+        // /proc/stat — fake aggregate CPU line + enough for tools like htop/top
+        File(procDir, "stat").writeText(
+            "cpu  0 0 0 0 0 0 0 0 0 0\n" +
+            "cpu0 0 0 0 0 0 0 0 0 0 0\n" +
+            "intr 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n" +
+            "ctxt 0\n" +
+            "btime 0\n" +
+            "processes 0\n" +
+            "procs_running 1\n" +
+            "procs_blocked 0\n" +
+            "softirq 0 0 0 0 0 0 0 0 0 0 0\n"
+        )
+
+        // /proc/version — proot-distro style
+        File(procDir, "version").writeText(
+            "Linux version 6.17.0-PRoot-Distro (proot@localhost) " +
+            "(Ubuntu clang version 14.0.0) #1 SMP PREEMPT_DYNAMIC Fri, 10 Oct 2025 00:00:00 +0000\n"
+        )
+
+        // /proc/uptime — seconds since boot
+        File(procDir, "uptime").writeText("0.00 0.00\n")
+
+        // /proc/loadavg — 1/5/15 min averages + running/total
+        File(procDir, "loadavg").writeText("0.00 0.00 0.00 1/1 0\n")
+
+        // /proc/vmstat — minimal, enough for tools that parse it
+        File(procDir, "vmstat").writeText(
+            "nr_free_pages 0\n" +
+            "nr_inactive_anon 0\n" +
+            "nr_active_anon 0\n" +
+            "nr_inactive_file 0\n" +
+            "nr_active_file 0\n" +
+            "pswpin 0\n" +
+            "pswpout 0\n" +
+            "pgfault 0\n" +
+            "pgmajfault 0\n"
+        )
+    }
+
     fun postExtractionFixups(rootfsDir: File) {
         writeResolvConf(rootfsDir)
         writeHosts(rootfsDir)
         registerAndroidIds(rootfsDir)
+        writeFakeProcFiles(rootfsDir)
 
         val tmpDir = File(rootfsDir, "tmp")
         tmpDir.mkdirs()
