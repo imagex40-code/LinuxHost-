@@ -53,9 +53,9 @@ fun AppNavigation() {
     val status by engine.status.collectAsState()
 
     var previousStatus by remember { mutableStateOf(status) }
+    val successStates = listOf(InstanceStatus.INSTALLED, InstanceStatus.RUNNING, InstanceStatus.STOPPED)
     LaunchedEffect(status) {
-        if (previousStatus in listOf(InstanceStatus.NOT_INSTALLED, InstanceStatus.INSTALLING, InstanceStatus.INTERRUPTED) &&
-            status !in listOf(InstanceStatus.NOT_INSTALLED, InstanceStatus.INSTALLING, InstanceStatus.INTERRUPTED)) {
+        if (previousStatus in listOf(InstanceStatus.INSTALLING) && status in successStates) {
             navController.navigate(Screen.Dashboard.route) {
                 popUpTo(Screen.Install.route) { inclusive = true }
             }

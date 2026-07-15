@@ -19,14 +19,9 @@ object ProotInstaller {
         val loader = prootLoader(context)
 
         if (!proot.exists() || !proot.canExecute()) {
-            val nativeDir = File(context.applicationInfo.nativeLibraryDir)
-            val nativeProot = File(nativeDir, "proot")
-            if (nativeProot.exists()) {
-                nativeProot.copyTo(proot, overwrite = true)
-            } else {
-                context.assets.open("arm64-v8a/proot").use { input ->
-                    proot.outputStream().use { out -> input.copyTo(out) }
-                }
+            proot.parentFile?.mkdirs()
+            context.assets.open("bin/proot").use { input ->
+                proot.outputStream().use { out -> input.copyTo(out) }
             }
             proot.setExecutable(true, false)
         }
