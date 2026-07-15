@@ -1,5 +1,6 @@
 package com.linuxhost
 
+import android.util.Log
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -110,7 +111,9 @@ object RootfsExtractor {
                 }
                 TarType.SYMLINK -> {
                     outFile.parentFile?.mkdirs()
+                    val existedBefore = outFile.exists()
                     outFile.delete()
+                    Log.d("RootfsExtractor", "symlink: ${outFile.absolutePath} -> ${entry.linkName}, existed_before_delete=$existedBefore")
                     android.system.Os.symlink(entry.linkName, outFile.absolutePath)
                 }
             }
